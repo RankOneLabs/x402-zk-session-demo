@@ -11,7 +11,6 @@ import {
   bigIntToHex,
   hexToBigInt,
   type Point,
-  type SignedCredential,
 } from '@zk-session/crypto';
 import type { IssuanceRequest, IssuanceResponse, PaymentResult } from './types.js';
 import { PaymentVerifier, type PaymentVerificationConfig } from './payment-verifier.js';
