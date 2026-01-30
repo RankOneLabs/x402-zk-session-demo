@@ -6,7 +6,7 @@ import {
   poseidonHash7,
   hexToBigInt,
   randomFieldElement,
-} from '@zk-session/crypto';
+} from '@demo/crypto';
 
 describe('CredentialIssuer', () => {
   const issuerConfig: IssuerConfig = {

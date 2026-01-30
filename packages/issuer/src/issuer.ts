@@ -11,7 +11,7 @@ import {
   bigIntToHex,
   hexToBigInt,
   type Point,
-} from '@zk-session/crypto';
+} from '@demo/crypto';
 import type { IssuanceRequest, IssuanceResponse, PaymentResult } from './types.js';
 import { PaymentVerifier, type PaymentVerificationConfig } from './payment-verifier.js';
 
@@ -45,25 +45,25 @@ export class CredentialIssuer {
   private readonly publicKey: Point;
   private readonly tiers: TierConfig[];
   private readonly paymentVerifier?: PaymentVerifier;
-  
+
   constructor(private readonly config: IssuerConfig) {
     this.publicKey = derivePublicKey(config.secretKey);
     this.tiers = [...config.tiers].sort((a, b) => b.minAmountCents - a.minAmountCents);
-    
+
     // Initialize payment verifier if configured
     if (config.paymentVerification) {
       this.paymentVerifier = new PaymentVerifier(config.paymentVerification);
       console.log(`[Issuer] On-chain verification enabled for chain ${config.paymentVerification.chainId}`);
     }
   }
-  
+
   /**
    * Get the issuer's public key
    */
   getPublicKey(): Point {
     return this.publicKey;
   }
-  
+
   /**
    * Issue a credential after verifying payment
    */
@@ -73,7 +73,7 @@ export class CredentialIssuer {
     if (!payment.valid) {
       throw new Error('Invalid payment proof');
     }
-    
+
     // 2. Determine tier from payment amount
     // Convert to integer cents to avoid floating-point precision issues
     const amountCents = Math.round(payment.amountUSDC * 100);
@@ -81,14 +81,14 @@ export class CredentialIssuer {
     if (!tierConfig) {
       throw new Error(`Payment amount $${payment.amountUSDC} below minimum tier`);
     }
-    
+
     // 3. Build credential
     const now = Math.floor(Date.now() / 1000);
     const userCommitment: Point = {
       x: hexToBigInt(request.userCommitment.x),
       y: hexToBigInt(request.userCommitment.y),
     };
-    
+
     // 4. Compute message hash for signature
     const message = poseidonHash7(
       this.config.serviceId,
@@ -99,10 +99,10 @@ export class CredentialIssuer {
       userCommitment.x,
       userCommitment.y,
     );
-    
+
     // 5. Sign with Schnorr
     const signature = schnorrSign(this.config.secretKey, message);
-    
+
     // 6. Return signed credential
     return {
       credential: {
@@ -129,7 +129,7 @@ export class CredentialIssuer {
       },
     };
   }
-  
+
   /**
    * Verify an x402 payment
    */
@@ -145,14 +145,14 @@ export class CredentialIssuer {
         payer: proof.mock.payer,
       };
     }
-    
+
     // On-chain payment verification
     if (proof.txHash) {
       if (!this.paymentVerifier) {
         console.error(`[Issuer] On-chain verification requested but not configured`);
         return { valid: false, amountUSDC: 0, payer: '' };
       }
-      
+
       const txHash = proof.txHash;
       if (typeof txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
         console.error(`[Issuer] Invalid txHash format for on-chain verification: ${txHash}`);
@@ -160,12 +160,12 @@ export class CredentialIssuer {
       }
 
       const result = await this.paymentVerifier.verifyTransaction(txHash as `0x${string}`);
-      
+
       if (!result.valid) {
         console.error(`[Issuer] Payment verification failed: ${result.error}`);
         return { valid: false, amountUSDC: 0, payer: '' };
       }
-      
+
       return {
         valid: true,
         amountUSDC: result.amountUSDC,
@@ -173,13 +173,13 @@ export class CredentialIssuer {
         txHash: result.txHash,
       };
     }
-    
+
     if (proof.facilitatorReceipt) {
       // TODO: Verify with x402 facilitator API
       console.log(`[Issuer] Facilitator verification not yet implemented`);
       return { valid: false, amountUSDC: 0, payer: '' };
     }
-    
+
     return { valid: false, amountUSDC: 0, payer: '' };
   }
 }
