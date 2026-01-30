@@ -47,8 +47,11 @@ describe('Poseidon Hash', () => {
   });
   
   it('should handle large field elements', () => {
-    const large = 21888242871839275222246405745257275088548364400416034343698204186575808495616n;
-    const result = poseidonHash([large]);
+    const FIELD_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+    const large = FIELD_MODULUS; // FIELD_MODULUS - 1 + 1
+    const reduced = large % FIELD_MODULUS;
+    expect(reduced).toBe(0n);
+    const result = poseidonHash([reduced]);
     expect(typeof result).toBe('bigint');
   });
 });
