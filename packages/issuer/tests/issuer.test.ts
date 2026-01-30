@@ -79,7 +79,7 @@ describe('CredentialIssuer', () => {
     const cred = response.credential;
 
     // Reconstruct the message that was signed
-    const message = poseidonHash7([
+    const message = poseidonHash7(
       hexToBigInt(cred.serviceId),
       BigInt(cred.tier),
       BigInt(cred.maxPresentations),
@@ -87,7 +87,7 @@ describe('CredentialIssuer', () => {
       BigInt(cred.expiresAt),
       hexToBigInt(cred.userCommitment.x),
       hexToBigInt(cred.userCommitment.y),
-    ]);
+    );
 
     // Verify signature
     const valid = schnorrVerify(
