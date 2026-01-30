@@ -34,7 +34,7 @@ export interface IssuerConfig {
   serviceId: bigint;
   /** Issuer's secret key for signing */
   secretKey: bigint;
-  /** Pricing tiers (sorted by minAmountCents ascending) */
+  /** Pricing tiers (sorted by minAmountCents descending by the issuer) */
   tiers: TierConfig[];
   /** Enable mock payments for testing */
   allowMockPayments?: boolean;
