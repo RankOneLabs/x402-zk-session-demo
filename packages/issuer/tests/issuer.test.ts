@@ -25,6 +25,7 @@ describe('CredentialIssuer', () => {
     // Initialize crypto (Pedersen needs WASM init)
     await pedersenCommit(1n, 1n);
     issuer = new CredentialIssuer(issuerConfig);
+    await issuer.initialize();
   });
 
   it('should issue a credential for mock payment', async () => {
@@ -90,7 +91,7 @@ describe('CredentialIssuer', () => {
     );
 
     // Verify signature
-    const valid = schnorrVerify(
+    const valid = await schnorrVerify(
       {
         x: hexToBigInt(cred.issuerPubkey.x),
         y: hexToBigInt(cred.issuerPubkey.y),

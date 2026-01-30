@@ -42,12 +42,11 @@ export interface IssuerConfig {
 }
 
 export class CredentialIssuer {
-  private readonly publicKey: Point;
+  private publicKey: Point | null = null;
   private readonly tiers: TierConfig[];
   private readonly paymentVerifier?: PaymentVerifier;
 
   constructor(private readonly config: IssuerConfig) {
-    this.publicKey = derivePublicKey(config.secretKey);
     this.tiers = [...config.tiers].sort((a, b) => b.minAmountCents - a.minAmountCents);
 
     // Initialize payment verifier if configured
@@ -58,10 +57,22 @@ export class CredentialIssuer {
   }
 
   /**
+   * Initialize the issuer (derive public key)
+   */
+  async initialize(): Promise<void> {
+    if (!this.publicKey) {
+      this.publicKey = await derivePublicKey(this.config.secretKey);
+    }
+  }
+
+  /**
    * Get the issuer's public key
    */
-  getPublicKey(): Point {
-    return this.publicKey;
+  async getPublicKey(): Promise<Point> {
+    if (!this.publicKey) {
+      await this.initialize();
+    }
+    return this.publicKey!;
   }
 
   /**
@@ -101,7 +112,9 @@ export class CredentialIssuer {
     );
 
     // 5. Sign with Schnorr
-    const signature = schnorrSign(this.config.secretKey, message);
+    const signature = await schnorrSign(this.config.secretKey, message);
+
+    const pubKey = await this.getPublicKey();
 
     // 6. Return signed credential
     return {
@@ -123,8 +136,8 @@ export class CredentialIssuer {
           s: bigIntToHex(signature.s),
         },
         issuerPubkey: {
-          x: bigIntToHex(this.publicKey.x),
-          y: bigIntToHex(this.publicKey.y),
+          x: bigIntToHex(pubKey.x),
+          y: bigIntToHex(pubKey.y),
         },
       },
     };
