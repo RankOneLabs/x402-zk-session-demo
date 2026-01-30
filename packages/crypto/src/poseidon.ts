@@ -7,9 +7,6 @@
 
 import { poseidon1, poseidon2, poseidon3, poseidon4, poseidon5, poseidon6 } from 'poseidon-lite';
 
-// BN254 scalar field modulus
-const FIELD_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
-
 /**
  * Poseidon hash of arbitrary number of field elements
  * 
