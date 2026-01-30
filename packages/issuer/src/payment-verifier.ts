@@ -145,7 +145,7 @@ export class PaymentVerifier {
     console.log(`[PaymentVerifier] Waiting for ${confirmations} confirmation(s)...`);
     
     // Wait for transaction to be mined
-    const receipt = await this.client.waitForTransactionReceipt({
+    await this.client.waitForTransactionReceipt({
       hash: txHash,
       confirmations,
     });
