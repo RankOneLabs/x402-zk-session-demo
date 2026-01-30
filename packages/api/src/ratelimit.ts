@@ -1,7 +1,7 @@
 /**
  * In-Memory Rate Limiter
  * 
- * Tracks request counts per origin_token with sliding window.
+ * Tracks request counts per origin_token with a fixed (tumbling) window.
  */
 
 export interface RateLimitConfig {
