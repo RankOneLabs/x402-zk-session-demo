@@ -92,9 +92,10 @@ export class PaymentVerifier {
     const chain = getChain(config.chainId, config.rpcUrl);
     
     // Create viem client with the correct chain
+    // Use provided RPC URL or fall back to chain's default
     this.client = createPublicClient({
       chain,
-      transport: http(config.rpcUrl),
+      transport: http(config.rpcUrl ?? chain.rpcUrls.default.http[0]),
     });
     
     // Get USDC address for this chain
