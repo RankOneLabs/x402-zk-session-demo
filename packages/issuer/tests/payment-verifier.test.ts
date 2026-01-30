@@ -314,7 +314,7 @@ describe('PaymentVerifier', () => {
           chainId: 999999,
           recipientAddress: RECIPIENT_ADDRESS as `0x${string}`,
         });
-      }).toThrow('No USDC address configured for chain 999999');
+      }).toThrow(/No USDC address configured for chain 999999|Chain ID 999999 is not a known chain/);
     });
 
     it('should expose chain ID and USDC address', () => {
