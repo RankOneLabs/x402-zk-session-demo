@@ -58,8 +58,8 @@ function fromFr(fr: Fr): bigint {
  * 
  * For a hiding commitment, we pass [secret, blinding].
  * 
- * @param secret - The value to commit to
- * @param blinding - Optional blinding factor (random if not provided)
+ * @param secret - The value to commit to (reduced mod FIELD_MODULUS)
+ * @param blinding - Optional blinding factor, random if not provided (reduced mod FIELD_MODULUS)
  * @returns Commitment with point and opening values
  */
 export async function pedersenCommit(secret: bigint, blinding?: bigint): Promise<Commitment> {
@@ -86,6 +86,11 @@ export async function pedersenCommit(secret: bigint, blinding?: bigint): Promise
 
 /**
  * Synchronous version - requires bb to be initialized first
+ * 
+ * @param secret - The value to commit to (reduced mod FIELD_MODULUS)
+ * @param blinding - Optional blinding factor, random if not provided (reduced mod FIELD_MODULUS)
+ * @returns Commitment with point and opening values
+ * @throws If Barretenberg not initialized
  */
 export function pedersenCommitSync(secret: bigint, blinding?: bigint): Commitment {
   if (!bbInitialized) {

@@ -61,8 +61,13 @@ export function poseidonHash7(a: bigint, b: bigint, c: bigint, d: bigint, e: big
 }
 
 /**
- * Poseidon sponge for variable-length inputs
- * Absorbs rate-1 chunks with Poseidon-2
+ * Poseidon sponge for variable-length inputs (>6 elements)
+ * 
+ * Uses rate-1 sponge construction: absorb each input by hashing (state, input)
+ * with Poseidon-2. This matches Noir's sponge construction for compatibility.
+ * 
+ * Performance note: O(n) Poseidon calls for n inputs. For hot paths with
+ * known fixed-size inputs, prefer the direct poseidonHash with ≤6 elements.
  */
 function poseidonSponge(inputs: bigint[]): bigint {
   let state = 0n;
