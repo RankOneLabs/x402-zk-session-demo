@@ -32,16 +32,18 @@ export function bigIntToHex(value: bigint, padBytes = 32): string {
 }
 
 /**
- * Generate a random field element
+ * Generate a random field element with uniform distribution
+ * 
+ * Uses 512 bits of randomness to make modular bias negligible (< 2^-250).
  */
 export function randomFieldElement(): bigint {
-  const bytes = new Uint8Array(32);
+  const bytes = new Uint8Array(64);
   crypto.getRandomValues(bytes);
   let value = 0n;
   for (const byte of bytes) {
     value = (value << 8n) | BigInt(byte);
   }
-  return toField(value);
+  return value % FIELD_MODULUS;
 }
 
 /**
