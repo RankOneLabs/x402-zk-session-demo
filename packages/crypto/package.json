@@ -20,7 +20,7 @@
   "dependencies": {
     "@aztec/bb.js": "^2.1.11",
     "@noble/curves": "^1.4.0",
-    "poseidon-lite": "^0.3.0"
+    "poseidon-lite": "^0.3"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
