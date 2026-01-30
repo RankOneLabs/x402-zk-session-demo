@@ -65,15 +65,10 @@ fn main(
     assert(utils::field_lt(presentation_index, cred_max_presentations), "Presentation index out of bounds");
     
     // 5. Compute message hash for signature verification
-    let msg = bn254::hash_7([
-        cred_service_id,
-        cred_tier,
-        cred_max_presentations,
-        cred_issued_at,
-        cred_expires_at,
-        cred_commitment_x,
-        cred_commitment_y
-    ]);
+    // We split 7 inputs into 4 and 3 to ensure compatibility with JS poseidon-lite
+    let h1 = bn254::hash_4([cred_service_id, cred_tier, cred_max_presentations, cred_issued_at]);
+    let h2 = bn254::hash_3([cred_expires_at, cred_commitment_x, cred_commitment_y]);
+    let msg = bn254::hash_2([h1, h2]);
     
     // 6. Verify Schnorr signature
     let sig_valid = schnorr::verify(

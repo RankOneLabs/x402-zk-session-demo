@@ -190,3 +190,37 @@ s_hi: 43738355177361219542240589404787882217
 - bb.js: @aztec/bb.js
 - poseidon: noir-lang/poseidon v0.2.3
 - poseidon-lite: npm (confirmed compatible with noir-lang/poseidon via their oracle_server.ts)
+
+## Final Resolution (2026-01-30)
+
+### The Actual Root Cause
+The mismatch was **NOT** in the elliptic curve arithmetic or `multi_scalar_mul`.
+The issue was in the **Poseidon Hash calculation** for the message hash `msg`.
+
+- **Noir**: `bn254::hash_7([...])`
+- **TypeScript**: `poseidonHash7` (implemented using `poseidonSponge` from `poseidon-lite`)
+
+The sponge construction used by `poseidon-lite` for inputs > 6 did not align with the implementation expected by Noir's `poseidon` library for `hash_7`. This caused the circuit to verify a signature against a different message hash than the one signed by the JS code.
+
+### The Solution: Chained Hashing
+We standardized the hashing strategy to use deterministic chaining of smaller, standard Poseidon permutations which are consistent across both libraries (`poseidon-lite` supports up to arity 6 natively).
+
+Instead of `hash_7`, we implemented:
+```rust
+// logical hash_7(a,b,c,d,e,f,g)
+h1 = hash_4(a, b, c, d);
+h2 = hash_3(e, f, g);
+msg = hash_2(h1, h2);
+```
+
+This was applied to:
+1.  **Noir (`src/main.nr`)**: Replacing `bn254::hash_7`.
+2.  **TypeScript (`packages/crypto/src/poseidon.ts`)**: Reimplementing `poseidonHash7`.
+
+### Verification Status
+After this fix, the challenges `e` matched perfectly:
+- JS `e`: `0x04229d52...`
+- Noir `e`: `0x04229d52...`
+
+And the full flow succeeded:
+`nbt verify x402_zk_session` -> **SUCCESS**
