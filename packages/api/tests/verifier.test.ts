@@ -14,6 +14,54 @@ describe('ZkVerifier', () => {
     });
   });
 
+  describe('destroy', () => {
+    it('should reset state when destroyed', async () => {
+      const verifier = new ZkVerifier({ skipVerification: true });
+      
+      // Verify something to ensure it's working
+      await verifier.verify({
+        proof: new Uint8Array([1, 2, 3]),
+        publicInputs: ['0x1', '0x2', '0x3', '0x4', '0x5', '0xabc', '0x1'],
+      });
+      
+      await verifier.destroy();
+      
+      expect(verifier.isInitialized()).toBe(false);
+    });
+
+    it('should be safe to call destroy multiple times', async () => {
+      const verifier = new ZkVerifier({ skipVerification: true });
+      
+      await verifier.destroy();
+      await verifier.destroy();
+      await verifier.destroy();
+      
+      expect(verifier.isInitialized()).toBe(false);
+    });
+
+    it('should allow re-initialization after destroy', async () => {
+      const verifier = new ZkVerifier({ skipVerification: true });
+      
+      // First use
+      const result1 = await verifier.verify({
+        proof: new Uint8Array([1, 2, 3]),
+        publicInputs: ['0x1', '0x2', '0x3', '0x4', '0x5', '0xabc', '0x1'],
+      });
+      expect(result1.valid).toBe(true);
+      
+      // Destroy
+      await verifier.destroy();
+      
+      // Re-use (should re-initialize automatically)
+      const result2 = await verifier.verify({
+        proof: new Uint8Array([1, 2, 3]),
+        publicInputs: ['0x1', '0x2', '0x3', '0x4', '0x5', '0xdef', '0x2'],
+      });
+      expect(result2.valid).toBe(true);
+      expect(result2.outputs?.originToken).toBe('0xdef');
+    });
+  });
+
   describe('verify with skipVerification', () => {
     it('should return valid in skip mode', async () => {
       const verifier = new ZkVerifier({ skipVerification: true });
@@ -41,6 +89,32 @@ describe('ZkVerifier', () => {
       });
       
       expect(result.outputs?.tier).toBe(2);
+    });
+
+    it('should reject if publicInputs has fewer than 7 elements', async () => {
+      const verifier = new ZkVerifier({ skipVerification: true });
+      
+      const result = await verifier.verify({
+        proof: new Uint8Array([1, 2, 3]),
+        publicInputs: ['0x1', '0x2', '0x3'], // Only 3 elements
+      });
+      
+      expect(result.valid).toBe(false);
+      expect(result.error).toContain('Invalid publicInputs length');
+      expect(result.error).toContain('expected >= 7');
+      expect(result.error).toContain('got 3');
+    });
+
+    it('should reject invalid tier hex value', async () => {
+      const verifier = new ZkVerifier({ skipVerification: true });
+      
+      const result = await verifier.verify({
+        proof: new Uint8Array([1, 2, 3]),
+        publicInputs: ['0x1', '0x2', '0x3', '0x4', '0x5', '0xabc', 'not-hex'],
+      });
+      
+      expect(result.valid).toBe(false);
+      expect(result.error).toBe('Invalid tier value in publicInputs');
     });
   });
 });

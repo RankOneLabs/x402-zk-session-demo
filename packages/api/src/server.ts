@@ -47,9 +47,12 @@ export function createApiServer(config: ApiServerConfig) {
   
   // Example protected endpoint
   protectedRouter.get('/whoami', (req: Request, res: Response) => {
+    const token = req.zkSession?.originToken ?? '';
+    const truncatedToken = token.length > 16 ? `${token.slice(0, 16)}...` : token;
+    
     res.json({
       tier: req.zkSession?.tier,
-      originToken: req.zkSession?.originToken?.slice(0, 16) + '...',
+      originToken: truncatedToken,
       message: 'You have valid ZK credentials!',
     });
   });
@@ -98,6 +101,12 @@ export function createApiServer(config: ApiServerConfig) {
   // Error handler
   app.use((err: Error, _req: Request, res: Response, _next: express.NextFunction) => {
     console.error('[API] Error:', err.message);
+    
+    // Don't send response if headers already sent (prevents crash on streaming errors)
+    if (res.headersSent) {
+      return;
+    }
+    
     res.status(500).json({ error: err.message });
   });
   
@@ -121,24 +130,40 @@ const thisFile = fileURLToPath(import.meta.url);
 const mainArg = path.resolve(process.argv[1]);
 const isMain = thisFile === mainArg;
 if (isMain) {
-  // Get issuer public key from environment or use default
-  const issuerPubkeyX = process.env.ISSUER_PUBKEY_X ?? '0x1';
-  const issuerPubkeyY = process.env.ISSUER_PUBKEY_Y ?? '0x2';
+  const skipProofVerification = process.env.SKIP_PROOF_VERIFICATION === 'true';
+  
+  // Issuer public key is required in production mode
+  const issuerPubkeyX = process.env.ISSUER_PUBKEY_X;
+  const issuerPubkeyY = process.env.ISSUER_PUBKEY_Y;
+  
+  if (!skipProofVerification && (!issuerPubkeyX || !issuerPubkeyY)) {
+    console.error('[API] Error: ISSUER_PUBKEY_X and ISSUER_PUBKEY_Y are required when proof verification is enabled.');
+    console.error('[API] Set SKIP_PROOF_VERIFICATION=true for development without real keys.');
+    process.exit(1);
+  }
+  
+  // Use dummy keys in skip mode (they won't be used for verification)
+  const pubkeyX = issuerPubkeyX ?? '0x1';
+  const pubkeyY = issuerPubkeyY ?? '0x2';
+  
+  if (skipProofVerification && (!issuerPubkeyX || !issuerPubkeyY)) {
+    console.warn('[API] Warning: Using dummy issuer public keys (proof verification is disabled)');
+  }
   
   const config: ApiServerConfig = {
     port: parseInt(process.env.PORT ?? '3002'),
     zkSession: {
       serviceId: BigInt(process.env.SERVICE_ID ?? '1'),
       issuerPubkey: {
-        x: hexToBigInt(issuerPubkeyX),
-        y: hexToBigInt(issuerPubkeyY),
+        x: hexToBigInt(pubkeyX),
+        y: hexToBigInt(pubkeyY),
       },
       rateLimit: {
         maxRequestsPerToken: parseInt(process.env.RATE_LIMIT_MAX ?? '100'),
         windowSeconds: parseInt(process.env.RATE_LIMIT_WINDOW ?? '60'),
       },
       minTier: parseInt(process.env.MIN_TIER ?? '0'),
-      skipProofVerification: process.env.SKIP_PROOF_VERIFICATION === 'true',
+      skipProofVerification,
     },
   };
   

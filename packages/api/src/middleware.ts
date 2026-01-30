@@ -2,6 +2,17 @@
  * ZK Session Verification Middleware
  * 
  * Verifies ZK proofs and enforces rate limits.
+ * 
+ * **Security Note (Replay Protection):**
+ * Proofs are valid within a time window (60s past, 5s future) and could
+ * theoretically be replayed within that window. However, replays use the
+ * same origin_token and thus consume the same rate limit quota - an attacker
+ * replaying your proof uses YOUR rate limit, not theirs.
+ * 
+ * For production systems requiring stronger replay protection, consider:
+ * - Tracking seen proof hashes within the time window (memory overhead)
+ * - Adding a client-generated nonce to the circuit (requires circuit changes)
+ * - Reducing time tolerance further (may cause clock sync issues)
  */
 
 import type { Request, Response, NextFunction } from 'express';
@@ -22,12 +33,10 @@ export interface ZkSessionConfig {
   skipProofVerification?: boolean;
 }
 
-export interface VerificationResult {
-  valid: boolean;
-  tier?: number;
-  originToken?: string;
-  error?: string;
-}
+/** Discriminated union for verification results */
+export type VerificationResult = 
+  | { valid: true; tier: number; originToken: string }
+  | { valid: false; error: string };
 
 // Extend Express Request to include ZK session info
 declare global {
@@ -44,6 +53,7 @@ declare global {
 export class ZkSessionMiddleware {
   private rateLimiter: RateLimiter;
   private verifier: ZkVerifier;
+  private pruneIntervalId: NodeJS.Timeout | null = null;
   
   constructor(private readonly config: ZkSessionConfig) {
     this.rateLimiter = new RateLimiter(config.rateLimit);
@@ -52,12 +62,26 @@ export class ZkSessionMiddleware {
     });
     
     // Prune expired entries every minute
-    setInterval(() => {
+    this.pruneIntervalId = setInterval(() => {
       const pruned = this.rateLimiter.prune();
       if (pruned > 0) {
         console.log(`[ZkSession] Pruned ${pruned} expired rate limit entries`);
       }
     }, 60000);
+    
+    // Prevent interval from keeping process alive
+    this.pruneIntervalId.unref();
+  }
+  
+  /**
+   * Clean up resources (timers, verifier backend)
+   */
+  async destroy(): Promise<void> {
+    if (this.pruneIntervalId) {
+      clearInterval(this.pruneIntervalId);
+      this.pruneIntervalId = null;
+    }
+    await this.verifier.destroy();
   }
   
   /**
@@ -72,8 +96,10 @@ export class ZkSessionMiddleware {
         return;
       }
       
+      // TypeScript now knows result is { valid: true; tier: number; originToken: string }
+      
       // Check rate limit
-      const rateLimit = this.rateLimiter.check(result.originToken!);
+      const rateLimit = this.rateLimiter.check(result.originToken);
       
       // Add rate limit headers
       res.set('X-RateLimit-Limit', this.config.rateLimit.maxRequestsPerToken.toString());
@@ -87,8 +113,8 @@ export class ZkSessionMiddleware {
       
       // Attach session info to request
       req.zkSession = {
-        tier: result.tier!,
-        originToken: result.originToken!,
+        tier: result.tier,
+        originToken: result.originToken,
       };
       
       next();
@@ -147,14 +173,18 @@ export class ZkSessionMiddleware {
     // Verify the public inputs match (first 5 elements)
     for (let i = 0; i < 5; i++) {
       if (proofData.publicInputs[i] !== expectedPublicInputs[i]) {
-        // Allow some time drift for current_time (±60 seconds)
+        // Allow asymmetric time drift for current_time:
+        // - Past: up to 60s (network latency, processing time)
+        // - Future: up to 5s (clock skew only, prevents pre-generation)
         if (i === 1) {
           const proofTime = BigInt(proofData.publicInputs[i] ?? '0x0');
-          const drift = proofTime > currentTime 
-            ? proofTime - currentTime 
-            : currentTime - proofTime;
-          if (drift <= 60n) {
-            continue; // Accept with time drift
+          const isPast = proofTime < currentTime;
+          const drift = isPast 
+            ? currentTime - proofTime 
+            : proofTime - currentTime;
+          const maxDrift = isPast ? 60n : 5n;
+          if (drift <= maxDrift) {
+            continue; // Accept with allowed time drift
           }
         }
         return { 

@@ -90,9 +90,28 @@ export class ZkVerifier {
       this.initialized = true;
       console.log('[ZkVerifier] Initialized successfully');
     } catch (error) {
+      // Clean up any partially initialized resources
+      await this.destroy();
       this.initPromise = null;
       throw error;
     }
+  }
+  
+  /**
+   * Clean up resources (destroy backend if created)
+   */
+  async destroy(): Promise<void> {
+    if (this.backend) {
+      try {
+        await this.backend.destroy();
+      } catch {
+        // Ignore errors during cleanup
+      }
+      this.backend = null;
+    }
+    this.circuitBytecode = null;
+    this.initialized = false;
+    this.initPromise = null;
   }
   
   /**
@@ -122,15 +141,39 @@ export class ZkVerifier {
    * @returns Verification result with extracted outputs
    */
   async verify(proofData: ProofData): Promise<VerificationResult> {
+    // Validate publicInputs has enough elements for outputs
+    // Circuit layout: 5 public inputs + 2 public outputs (origin_token, tier)
+    const NUM_PUBLIC_INPUTS = 5;
+    const NUM_PUBLIC_OUTPUTS = 2;
+    const REQUIRED_LENGTH = NUM_PUBLIC_INPUTS + NUM_PUBLIC_OUTPUTS;
+    
+    if (proofData.publicInputs.length < REQUIRED_LENGTH) {
+      return { 
+        valid: false, 
+        error: `Invalid publicInputs length: expected >= ${REQUIRED_LENGTH}, got ${proofData.publicInputs.length}` 
+      };
+    }
+    
+    // Extract outputs (after the public inputs)
+    const originToken = proofData.publicInputs[NUM_PUBLIC_INPUTS];
+    const tierHex = proofData.publicInputs[NUM_PUBLIC_INPUTS + 1];
+    
+    // Validate extracted values exist (TypeScript narrowing)
+    if (originToken === undefined || tierHex === undefined) {
+      return { valid: false, error: 'Missing origin_token or tier in publicInputs' };
+    }
+    
+    const tier = parseInt(tierHex, 16);
+    if (isNaN(tier)) {
+      return { valid: false, error: 'Invalid tier value in publicInputs' };
+    }
+    
     // Skip verification in dev mode
     if (this.config.skipVerification) {
       console.log('[ZkVerifier] Skipping verification (dev mode)');
       return {
         valid: true,
-        outputs: {
-          originToken: proofData.publicInputs[proofData.publicInputs.length - 2] ?? '0x0',
-          tier: parseInt(proofData.publicInputs[proofData.publicInputs.length - 1] ?? '0', 16),
-        },
+        outputs: { originToken, tier },
       };
     }
     
@@ -154,18 +197,10 @@ export class ZkVerifier {
         return { valid: false, error: 'Proof verification failed' };
       }
       
-      // Extract public outputs (last 2 elements)
-      // The circuit returns (origin_token, tier)
-      const numPublicInputs = 5; // service_id, current_time, origin_id, issuer_pk_x, issuer_pk_y
-      const originToken = proofData.publicInputs[numPublicInputs];
-      const tierHex = proofData.publicInputs[numPublicInputs + 1];
-      
+      // Outputs already extracted and validated above
       return {
         valid: true,
-        outputs: {
-          originToken: originToken ?? '0x0',
-          tier: tierHex ? parseInt(tierHex, 16) : 0,
-        },
+        outputs: { originToken, tier },
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -180,18 +215,6 @@ export class ZkVerifier {
   isInitialized(): boolean {
     return this.initialized;
   }
-  
-  /**
-   * Destroy the backend and free resources
-   */
-  async destroy(): Promise<void> {
-    if (this.backend) {
-      await this.backend.destroy();
-      this.backend = null;
-    }
-    this.initialized = false;
-    this.initPromise = null;
-  }
 }
 
 /**
@@ -204,14 +227,39 @@ export function parseProofFromRequest(proofB64: string): ProofData | null {
     const decoded = Buffer.from(proofB64, 'base64').toString('utf-8');
     const parsed = JSON.parse(decoded);
     
-    if (!parsed.proof || !Array.isArray(parsed.publicInputs)) {
+    // Validate proof field exists and is non-empty
+    if (!parsed.proof) {
+      return null;
+    }
+    
+    // Validate publicInputs is an array
+    if (!Array.isArray(parsed.publicInputs)) {
+      return null;
+    }
+    
+    // Parse proof bytes
+    let proofBytes: Uint8Array;
+    if (typeof parsed.proof === 'string') {
+      // Validate non-empty string
+      if (parsed.proof.length === 0) {
+        return null;
+      }
+      proofBytes = Buffer.from(parsed.proof, 'base64');
+      // Validate decoded bytes are non-empty (catches invalid base64)
+      if (proofBytes.length === 0) {
+        return null;
+      }
+    } else if (Array.isArray(parsed.proof)) {
+      proofBytes = new Uint8Array(parsed.proof);
+      if (proofBytes.length === 0) {
+        return null;
+      }
+    } else {
       return null;
     }
     
     return {
-      proof: typeof parsed.proof === 'string' 
-        ? Buffer.from(parsed.proof, 'base64')
-        : new Uint8Array(parsed.proof),
+      proof: proofBytes,
       publicInputs: parsed.publicInputs,
     };
   } catch {

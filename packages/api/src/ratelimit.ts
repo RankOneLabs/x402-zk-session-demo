@@ -1,7 +1,13 @@
 /**
  * In-Memory Rate Limiter
  * 
- * Tracks request counts per origin_token with a fixed (tumbling) window.
+ * Tracks request counts per origin_token using a fixed window algorithm.
+ * 
+ * **Note:** This uses fixed windows, not sliding windows. A user could
+ * potentially make 2x maxRequestsPerToken by timing requests at window
+ * boundaries (e.g., max requests at end of window, then max more at start
+ * of next). For most use cases this is acceptable; implement a sliding
+ * window or token bucket algorithm if stricter guarantees are needed.
  */
 
 export interface RateLimitConfig {
