@@ -50,7 +50,12 @@ export function randomFieldElement(): bigint {
 }
 
 /**
- * Convert a string to a field element via hashing
+ * Convert a string to a field element
+ * 
+ * NOTE: This is NOT a cryptographic hash. It treats the string as a base-256
+ * number with modular reduction. Only use for non-security-critical purposes
+ * like converting server-controlled identifiers (e.g., URL pathnames) to
+ * field elements. Do not use for user-controlled input in security contexts.
  */
 export function stringToField(str: string): bigint {
   const encoder = new TextEncoder();

@@ -65,3 +65,44 @@ describe('Schnorr Signatures', () => {
     expect(sig1.s !== sig2.s || sig1.r.x !== sig2.r.x).toBe(true);
   });
 });
+
+describe('Schnorr input validation', () => {
+  it('should reject negative secret key', () => {
+    expect(() => schnorrSign(-1n, 123n)).toThrow('secretKey must be non-negative');
+  });
+
+  it('should reject zero secret key', () => {
+    expect(() => schnorrSign(0n, 123n)).toThrow('secretKey cannot be zero');
+  });
+
+  it('should reject negative message in sign', () => {
+    const { secretKey } = generateKeypair();
+    expect(() => schnorrSign(secretKey, -1n)).toThrow('message must be non-negative');
+  });
+
+  it('should reject secret key >= FIELD_MODULUS', () => {
+    const FIELD_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
+    expect(() => schnorrSign(FIELD_MODULUS, 123n)).toThrow('secretKey must be less than field modulus');
+  });
+
+  it('should reject negative message in verify', () => {
+    const { secretKey, publicKey } = generateKeypair();
+    const sig = schnorrSign(secretKey, 123n);
+    expect(() => schnorrVerify(publicKey, -1n, sig)).toThrow('message must be non-negative');
+  });
+
+  it('should reject invalid public key point', () => {
+    const { secretKey } = generateKeypair();
+    const sig = schnorrSign(secretKey, 123n);
+    // (2, 2) is definitely not on BN254 G1: y^2 = x^3 + 3 -> 4 ≠ 11
+    const invalidPk = { x: 2n, y: 2n };
+    expect(() => schnorrVerify(invalidPk, 123n, sig)).toThrow('publicKey is not a valid point on the curve');
+  });
+
+  it('should reject public key at infinity', () => {
+    const { secretKey } = generateKeypair();
+    const sig = schnorrSign(secretKey, 123n);
+    const infinity = { x: 0n, y: 0n };
+    expect(() => schnorrVerify(infinity, 123n, sig)).toThrow('publicKey cannot be the point at infinity');
+  });
+});

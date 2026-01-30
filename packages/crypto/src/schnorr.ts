@@ -38,8 +38,9 @@ function validatePoint(point: Point, name: string): void {
     throw new Error(`${name} cannot be the point at infinity`);
   }
   try {
-    // This throws if point is not on curve
-    G1.fromAffine({ x: point.x, y: point.y });
+    // fromAffine doesn't validate by default, must call assertValidity
+    const p = G1.fromAffine({ x: point.x, y: point.y });
+    p.assertValidity();
   } catch {
     throw new Error(`${name} is not a valid point on the curve`);
   }

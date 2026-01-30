@@ -57,5 +57,22 @@ describe('Poseidon Hash', () => {
   
   it('should throw error for empty array', () => {
     expect(() => poseidonHash([])).toThrow('Poseidon hash requires at least one input');
+
+  it('should match circomlibjs/poseidon-lite reference vector', () => {
+    // Reference test vector from poseidon-lite / circomlibjs
+    // hash([1, 2]) on BN254 scalar field
+    // This value is the canonical reference used across ZK ecosystems
+    const result = poseidonHash([1n, 2n]);
+    expect(result.toString()).toBe(
+      '7853200120776062878684798364095072458815029376092732009249414926327459813530'
+    );
+  });
+
+  it('should match poseidon-lite reference for hash([0])', () => {
+    // Poseidon hash of [0] using poseidon-lite / circomlibjs parameters
+    const result = poseidonHash([0n]);
+    expect(result.toString()).toBe(
+      '19014214495641488759237505126948346942972912379615652741039992445865937985820'
+    );
   });
 });
