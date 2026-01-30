@@ -151,7 +151,13 @@ export class CredentialIssuer {
         return { valid: false, amountUSDC: 0, payer: '' };
       }
       
-      const result = await this.paymentVerifier.verifyTransaction(proof.txHash as `0x${string}`);
+      const txHash = proof.txHash;
+      if (typeof txHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(txHash)) {
+        console.error(`[Issuer] Invalid txHash format for on-chain verification: ${txHash}`);
+        return { valid: false, amountUSDC: 0, payer: '' };
+      }
+
+      const result = await this.paymentVerifier.verifyTransaction(txHash as `0x${string}`);
       
       if (!result.valid) {
         console.error(`[Issuer] Payment verification failed: ${result.error}`);
