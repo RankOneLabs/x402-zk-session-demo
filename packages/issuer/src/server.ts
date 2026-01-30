@@ -6,6 +6,8 @@
 
 import express, { type Request, type Response, type NextFunction } from 'express';
 import cors from 'cors';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CredentialIssuer, type IssuerConfig } from './issuer.js';
 import type { IssuanceRequest } from './types.js';
 
@@ -92,7 +94,9 @@ export function createIssuerServer(config: IssuerServerConfig) {
 }
 
 // Run as standalone server
-const isMain = import.meta.url === `file://${process.argv[1]}`;
+const thisFile = fileURLToPath(import.meta.url);
+const mainArg = path.resolve(process.argv[1]);
+const isMain = thisFile === mainArg;
 if (isMain) {
   // Parse chain configuration
   const chainId = parseInt(process.env.CHAIN_ID ?? '84532'); // Default to Base Sepolia
