@@ -16,7 +16,9 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@aztec/bb.js": "^2.1.11",
     "@demo/crypto": "*",
+    "@noir-lang/noir_js": "^1.0.0-beta.18",
     "commander": "^12.0.0"
   },
   "devDependencies": {

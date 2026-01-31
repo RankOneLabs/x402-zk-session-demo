@@ -138,7 +138,7 @@ export class CredentialIssuer {
     const pubKey = await this.getPublicKey();
 
     // 6. Return signed credential
-    return {
+    const response = {
       credential: {
         serviceId: bigIntToHex(this.config.serviceId),
         tier: tierConfig.tier,
@@ -162,6 +162,8 @@ export class CredentialIssuer {
         },
       },
     };
+    console.log('[Issuer] Returning signature:', response.credential.signature);
+    return response;
   }
 
   /**

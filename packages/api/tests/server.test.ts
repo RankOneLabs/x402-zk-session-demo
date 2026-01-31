@@ -70,8 +70,8 @@ describe('API Server', () => {
       
       const res = await request(app).get('/api/whoami');
       
-      expect(res.status).toBe(401);
-      expect(res.body.error).toBe('Missing ZK session headers');
+      expect(res.status).toBe(402); // x402: Payment Required
+      expect(res.body.error).toBe('Payment Required');
     });
 
     it('should reject requests with missing proof header', async () => {
@@ -82,8 +82,8 @@ describe('API Server', () => {
         .set('zk-session-token', '0xabc')
         .set('zk-session-tier', '1');
       
-      expect(res.status).toBe(401);
-      expect(res.body.error).toBe('Missing ZK session headers');
+      expect(res.status).toBe(402); // x402: Payment Required
+      expect(res.body.error).toBe('Payment Required');
     });
 
     it('should reject requests with invalid tier', async () => {
@@ -366,12 +366,12 @@ describe('API Server', () => {
   });
 
   describe('Error handling', () => {
-    it('should return 404 for unknown routes', async () => {
+    it('should return 402 for unknown routes (auth check first)', async () => {
       const { app } = createApiServer(config);
       
       const res = await request(app).get('/api/unknown');
       
-      expect(res.status).toBe(401); // Auth check happens first on /api/*
+      expect(res.status).toBe(402); // x402: Payment Required - auth check happens first on /api/*
     });
 
     it('should handle malformed JSON in request body', async () => {

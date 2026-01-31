@@ -1,0 +1,21 @@
+{
+    "name": "@demo/e2e",
+    "version": "0.1.0",
+    "private": true,
+    "description": "End-to-End integration tests for x402 ZK Session",
+    "type": "module",
+    "scripts": {
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@demo/cli": "*",
+        "@demo/issuer": "*",
+        "@demo/api": "*",
+        "viem": "^2.0.0"
+    },
+    "devDependencies": {
+        "@types/node": "^20.10.0",
+        "vitest": "^1.0.0",
+        "tsx": "^4.7.0"
+    }
+}

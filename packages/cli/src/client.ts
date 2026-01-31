@@ -12,7 +12,11 @@ import {
   bigIntToHex,
   hexToBigInt,
 } from '@demo/crypto';
+import { Noir } from '@noir-lang/noir_js';
+import { UltraHonkBackend } from '@aztec/bb.js';
+import { CompiledCircuit } from '@noir-lang/types';
 import { CredentialStorage, type StoredCredential } from './storage.js';
+import x402Circuit from './circuits/x402_zk_session.json' with { type: 'json' };
 import { ProofCache, type CachedProof } from './cache.js';
 
 export type PresentationStrategy =
@@ -183,40 +187,94 @@ export class ZkSessionClient {
     presentationIndex: number,
     timeBucket?: number
   ): Promise<CachedProof> {
-    // TODO: Use @noir-lang/noir_js for actual proof generation
-    // Generates random bytes as a placeholder proof for demo mode (skipProofVerification)
+    const circuit = x402Circuit as any;
+    // Use UltraHonk backend matching the verifier
+    const backend = new UltraHonkBackend(circuit.bytecode);
+    const noir = new Noir(circuit);
 
-    const nullifierSeed = hexToBigInt(credential.nullifierSeed);
-
-    // Compute origin_token = H(nullifier_seed, origin_id, presentation_index)
-    const originToken = poseidonHash3(
-      nullifierSeed,
-      originId,
-      BigInt(presentationIndex)
-    );
-
-    // Mock proof (base64 of random bytes) - placeholder
-    const mockProofBytes = new Uint8Array(128);
-    crypto.getRandomValues(mockProofBytes);
-    const mockProof = Buffer.from(mockProofBytes).toString('base64');
-
-    // Expiration: use time bucket end or 60 seconds
+    const currentTime = BigInt(Math.floor(Date.now() / 1000));
     const expiresAt = timeBucket
       ? timeBucket + this.config.timeBucketSeconds
-      : Math.floor(Date.now() / 1000) + 60;
+      : Number(currentTime) + 60;
 
-    return {
-      proof: mockProof,
-      originToken: bigIntToHex(originToken),
-      tier: credential.tier,
-      expiresAt,
-      meta: {
-        serviceId: credential.serviceId,
-        originId: originId.toString(),
-        presentationIndex,
-        timeBucket,
-      },
+    // Helper to format as hex string for Noir (0x prefix)
+    const fmt = (n: bigint | number | string) => bigIntToHex(BigInt(n));
+
+    // Prepare inputs matching circuit ABI
+    const input = {
+      // Public inputs
+      // Note: Noir expects these to be part of the witness generation
+      service_id: fmt(credential.serviceId),
+      current_time: fmt(currentTime),
+      origin_id: fmt(originId),
+      issuer_pubkey_x: fmt(credential.issuerPubkey.x),
+      issuer_pubkey_y: fmt(credential.issuerPubkey.y),
+
+      // Private inputs
+      cred_service_id: fmt(credential.serviceId),
+      cred_tier: fmt(credential.tier),
+      cred_max_presentations: fmt(credential.maxPresentations),
+      cred_issued_at: fmt(credential.issuedAt),
+      cred_expires_at: fmt(credential.expiresAt),
+      cred_commitment_x: fmt(credential.userCommitment.x),
+      cred_commitment_y: fmt(credential.userCommitment.y),
+
+      sig_r_x: fmt(credential.signature.r.x),
+      sig_r_y: fmt(credential.signature.r.y),
+      sig_s_lo: fmt(hexToBigInt(credential.signature.s) & ((1n << 128n) - 1n)),
+      sig_s_hi: fmt(hexToBigInt(credential.signature.s) >> 128n),
+
+      nullifier_seed: fmt(credential.nullifierSeed),
+      blinding_factor: fmt(credential.blindingFactor),
+
+      presentation_index: fmt(presentationIndex),
     };
+
+    try {
+      console.log('[Client] Issuer Pubkey:', credential.issuerPubkey);
+      console.log('[Client] User Commitment:', credential.userCommitment);
+      console.log('[Client] Signature:', credential.signature);
+
+      console.log('[Client] Generating witness with Noir...');
+      const { witness } = await noir.execute(input);
+
+      console.log('[Client] Generating proof with Barretenberg...');
+      const proofData = await backend.generateProof(witness);
+      console.log('[Client] Proof generation successful');
+
+      const { proof, publicInputs } = proofData;
+      console.log(`[Client] Proof size: ${proof.length} bytes, ${publicInputs.length} public inputs`);
+
+      // Extract outputs from public inputs
+      // Layout: [service_id, current_time, origin_id, issuer_pubkey_x, issuer_pubkey_y, origin_token, tier]
+      // We need last 2
+      const originToken = publicInputs[5];
+      const tier = publicInputs[6];
+
+      // Format proof data for transmission (JSON with base64 proof)
+      const transmissionData = {
+        proof: Buffer.from(proof).toString('base64'),
+        publicInputs
+      };
+
+      const proofB64 = Buffer.from(JSON.stringify(transmissionData)).toString('base64');
+
+      return {
+        proof: proofB64,
+        originToken: originToken,
+        tier: Number(hexToBigInt(tier)),
+        expiresAt,
+        meta: {
+          serviceId: credential.serviceId,
+          originId: originId.toString(),
+          presentationIndex,
+          timeBucket,
+        },
+      };
+    } finally {
+      // Cleanup to prevent memory leaks/hanging processes
+      await backend.destroy();
+    }
   }
 
   /**

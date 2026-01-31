@@ -68,6 +68,8 @@ export interface PaymentVerificationConfig {
   recipientAddress: `0x${string}`;
   /** USDC decimals (6 for standard USDC) */
   usdcDecimals?: number;
+  /** Optional override for USDC contract address (useful for local testing) */
+  usdcAddress?: `0x${string}`;
 }
 
 export interface VerifiedPayment {
@@ -86,27 +88,29 @@ export class PaymentVerifier {
   private client: any;
   private usdcAddress: `0x${string}`;
   private usdcDecimals: number;
-  
+
   constructor(private readonly config: PaymentVerificationConfig) {
     // Get the appropriate chain definition based on chainId
     const chain = getChain(config.chainId, config.rpcUrl);
-    
+
     // Create viem client with the correct chain
     // Use provided RPC URL or fall back to chain's default
     this.client = createPublicClient({
       chain,
       transport: http(config.rpcUrl ?? chain.rpcUrls.default.http[0]),
     });
-    
+
     // Get USDC address for this chain
-    this.usdcAddress = USDC_ADDRESSES[config.chainId];
+    // Use override if provided, otherwise fallback to hardcoded defaults
+    this.usdcAddress = config.usdcAddress ?? USDC_ADDRESSES[config.chainId];
+
     if (!this.usdcAddress) {
       throw new Error(`No USDC address configured for chain ${config.chainId}`);
     }
-    
+
     this.usdcDecimals = config.usdcDecimals ?? 6;
   }
-  
+
   /**
    * Verify a payment transaction on-chain
    * 
@@ -116,10 +120,10 @@ export class PaymentVerifier {
   async verifyTransaction(txHash: Hash): Promise<VerifiedPayment> {
     try {
       console.log(`[PaymentVerifier] Verifying tx: ${txHash}`);
-      
+
       // 1. Get transaction receipt
       const receipt = await this.client.getTransactionReceipt({ hash: txHash });
-      
+
       if (receipt.status !== 'success') {
         return {
           valid: false,
@@ -131,10 +135,10 @@ export class PaymentVerifier {
           error: 'Transaction failed',
         };
       }
-      
+
       // 2. Find USDC Transfer event to our recipient
       const transferLog = this.findTransferToRecipient(receipt.logs);
-      
+
       if (!transferLog) {
         return {
           valid: false,
@@ -146,13 +150,13 @@ export class PaymentVerifier {
           error: `No USDC transfer to ${this.config.recipientAddress} found`,
         };
       }
-      
+
       // 3. Decode transfer amount
       const amountRaw = transferLog.args.value as bigint;
       const amountUSDC = Number(amountRaw) / Math.pow(10, this.usdcDecimals);
-      
+
       console.log(`[PaymentVerifier] Verified: $${amountUSDC} USDC from ${transferLog.args.from}`);
-      
+
       return {
         valid: true,
         txHash,
@@ -164,7 +168,7 @@ export class PaymentVerifier {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`[PaymentVerifier] Error verifying tx ${txHash}:`, message);
-      
+
       return {
         valid: false,
         txHash,
@@ -176,7 +180,7 @@ export class PaymentVerifier {
       };
     }
   }
-  
+
   /**
    * Wait for a transaction to be confirmed and verify it
    * 
@@ -185,16 +189,16 @@ export class PaymentVerifier {
    */
   async waitAndVerify(txHash: Hash, confirmations = 1): Promise<VerifiedPayment> {
     console.log(`[PaymentVerifier] Waiting for ${confirmations} confirmation(s)...`);
-    
+
     // Wait for transaction to be mined
     await this.client.waitForTransactionReceipt({
       hash: txHash,
       confirmations,
     });
-    
+
     return this.verifyTransaction(txHash);
   }
-  
+
   /**
    * Find Transfer event to our recipient address
    */
@@ -206,35 +210,35 @@ export class PaymentVerifier {
       if (log.address.toLowerCase() !== this.usdcAddress.toLowerCase()) {
         continue;
       }
-      
+
       // Check if this is a Transfer event (topic[0] matches)
       const transferTopic = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef';
       if (log.topics[0] !== transferTopic) {
         continue;
       }
-      
+
       // Decode the event
       // topics[1] = from (indexed), topics[2] = to (indexed), data = value
       const from = '0x' + log.topics[1]!.slice(26);
       const to = '0x' + log.topics[2]!.slice(26);
       const value = BigInt(log.data);
-      
+
       // Check if recipient matches
       if (to.toLowerCase() === this.config.recipientAddress.toLowerCase()) {
         return { args: { from, to, value } };
       }
     }
-    
+
     return undefined;
   }
-  
+
   /**
    * Get the configured chain ID
    */
   getChainId(): number {
     return this.config.chainId;
   }
-  
+
   /**
    * Get the USDC contract address
    */

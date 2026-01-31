@@ -1,0 +1,84 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch: # Allow manual trigger
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages
+        run: npm run build
+
+      # Install Noir toolchain
+      - name: Install Nargo
+        uses: noir-lang/noirup@v0.1.2
+        with:
+          toolchain: stable
+
+      # Install Barretenberg (bb) for proof generation
+      - name: Install Barretenberg
+        run: |
+          VERSION="v4.0.0-nightly.20260130"
+          mkdir -p $HOME/.bb
+          curl -L -o /tmp/bb.tar.gz "https://github.com/AztecProtocol/aztec-packages/releases/download/${VERSION}/barretenberg-amd64-linux.tar.gz"
+          tar -xzf /tmp/bb.tar.gz -C $HOME/.bb
+          chmod +x $HOME/.bb/bb
+          echo "$HOME/.bb" >> $GITHUB_PATH
+
+      - name: Verify bb installation
+        run: $HOME/.bb/bb --version
+
+      # Install Foundry for Anvil and Forge
+      - name: Install Foundry
+        uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: nightly
+
+      - name: Verify Foundry installation
+        run: |
+          forge --version
+          anvil --version
+
+      # Compile the circuit
+      - name: Compile circuit
+        run: npm run circuit:build
+
+      # Run E2E tests (starts Anvil, deploys contracts, runs full flow)
+      - name: Run E2E tests
+        run: npm test --workspace=@demo/e2e
+        env:
+          # Use local Anvil (started by test)
+          RPC_URL: http://127.0.0.1:8545
+          CHAIN_ID: "31337"
+          # Skip real proof verification in CI (CRS download has network issues)
+          SKIP_PROOF_VERIFICATION: "true"
+
+      # Upload test artifacts on failure
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: |
+            packages/e2e/logs/
+            circuits/target/
+          retention-days: 7
