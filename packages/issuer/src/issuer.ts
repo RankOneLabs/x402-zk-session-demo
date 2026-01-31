@@ -79,6 +79,9 @@ export class CredentialIssuer {
    * Issue a credential after verifying payment
    */
   async issueCredential(request: IssuanceRequest): Promise<IssuanceResponse> {
+    // Ensure initialized (public key derived) to prevent race conditions
+    await this.initialize();
+
     // 1. Verify payment
     const payment = await this.verifyPayment(request.paymentProof);
     if (!payment.valid) {
