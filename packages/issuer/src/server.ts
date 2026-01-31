@@ -81,15 +81,20 @@ export function createIssuerServer(config: IssuerServerConfig) {
   return {
     app,
     start: () => {
-      return new Promise<void>((resolve) => {
-        issuer.initialize().then(() => {
-          app.listen(config.port, () => {
-            console.log(`[Issuer] Server running on port ${config.port}`);
-            console.log(`[Issuer] Service ID: ${config.serviceId}`);
-            console.log(`[Issuer] Mock payments: ${config.allowMockPayments ? 'enabled' : 'disabled'}`);
-            resolve();
+      return new Promise<void>((resolve, reject) => {
+        issuer.initialize()
+          .then(() => {
+            app.listen(config.port, () => {
+              console.log(`[Issuer] Server running on port ${config.port}`);
+              console.log(`[Issuer] Service ID: ${config.serviceId}`);
+              console.log(`[Issuer] Mock payments: ${config.allowMockPayments ? 'enabled' : 'disabled'}`);
+              resolve();
+            });
+          })
+          .catch((err: Error) => {
+            console.error('[Issuer] Failed to initialize:', err.message);
+            reject(err);
           });
-        });
       });
     },
   };
