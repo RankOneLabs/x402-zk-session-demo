@@ -6,7 +6,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import type { Point, SchnorrSignature } from '@demo/crypto';
 
 export interface StoredCredential {
@@ -67,7 +67,7 @@ export class CredentialStorage {
    */
   private save(): void {
     try {
-      const dir = this.storagePath.substring(0, this.storagePath.lastIndexOf('/'));
+      const dir = dirname(this.storagePath);
       if (!existsSync(dir)) {
         mkdirSync(dir, { recursive: true });
       }
