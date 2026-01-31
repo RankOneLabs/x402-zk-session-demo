@@ -32,5 +32,9 @@ jobs:
       - name: Run circuit tests
         run: npm run circuit:test
 
-      - name: Run tests
-        run: npm test
+      - name: Run unit tests
+        run: |
+          npm test --workspace=@demo/crypto
+          npm test --workspace=@demo/issuer
+          npm test --workspace=@demo/api
+          npm test --workspace=@demo/cli
