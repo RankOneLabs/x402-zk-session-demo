@@ -69,6 +69,8 @@ jobs:
           # Use local Anvil (started by test)
           RPC_URL: http://127.0.0.1:8545
           CHAIN_ID: "31337"
+          # Skip real proof verification in CI (CRS download has network issues)
+          SKIP_PROOF_VERIFICATION: "true"
 
       # Upload test artifacts on failure
       - name: Upload logs on failure

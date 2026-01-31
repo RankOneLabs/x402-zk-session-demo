@@ -19,6 +19,9 @@ const ISSUER_PORT = 3001;
 const API_PORT = 3002;
 const ANVIL_RPC = `http://127.0.0.1:${ANVIL_PORT}`;
 
+// In CI, skip real proof verification (CRS download fails due to network)
+const SKIP_PROOF_VERIFICATION = process.env.SKIP_PROOF_VERIFICATION === 'true';
+
 // Default Anvil account #0 (Private Key)
 const ANVIL_PK_0 = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'; // Account 0
 // Account #1 (User)
@@ -144,7 +147,7 @@ describe('End-to-End Flow', () => {
                 serviceId: 1001n,
                 issuerPubkey, // Use real issuer public key
                 rateLimit: { maxRequestsPerToken: 10, windowSeconds: 60 },
-                skipProofVerification: false, // REAL ZK MODE
+                skipProofVerification: SKIP_PROOF_VERIFICATION,
                 issuerUrl: `http://localhost:${ISSUER_PORT}`,
                 priceInfo: '1.00 USDC'
             }
