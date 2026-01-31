@@ -35,9 +35,9 @@ jobs:
       # Install Barretenberg (bb) for proof generation
       - name: Install Barretenberg
         run: |
-          VERSION="0.82.2"
+          VERSION="v4.0.0-nightly.20260130"
           mkdir -p $HOME/.bb
-          curl -L -o /tmp/bb.tar.gz "https://github.com/AztecProtocol/aztec-packages/releases/download/aztec-packages-v${VERSION}/barretenberg-amd64-linux.tar.gz"
+          curl -L -o /tmp/bb.tar.gz "https://github.com/AztecProtocol/aztec-packages/releases/download/${VERSION}/barretenberg-amd64-linux.tar.gz"
           tar -xzf /tmp/bb.tar.gz -C $HOME/.bb
           chmod +x $HOME/.bb/bb
           echo "$HOME/.bb" >> $GITHUB_PATH
