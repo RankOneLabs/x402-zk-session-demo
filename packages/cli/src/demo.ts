@@ -103,11 +103,11 @@ async function main() {
   
   for (let i = 0; i < 3; i++) {
     const response = await client.makeAuthenticatedRequest(`${API_URL}/api/whoami`);
-    const token = response.headers.get('X-RateLimit-Remaining');
+    const rateLimitRemaining = response.headers.get('X-RateLimit-Remaining');
     const body = await response.json() as { originToken: string };
     const zkToken = body.originToken;
     tokens.push(zkToken);
-    console.log(`  Request ${i + 1}: token = ${zkToken}`);
+    console.log(`  Request ${i + 1}: token = ${zkToken} (rate limit remaining: ${rateLimitRemaining ?? 'unknown'})`);
   }
   
   const allSame = tokens.every(t => t === tokens[0]);
