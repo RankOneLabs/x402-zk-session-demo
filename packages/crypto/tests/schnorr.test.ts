@@ -65,7 +65,9 @@ describe('Schnorr input validation', () => {
   });
 
   it('should reject secret key >= GRUMPKIN_SCALAR_MODULUS', async () => {
-    const BIG_MODULUS = 21888242871839275222246405745257275088696311157297823662689037894645226208583n; // Fq
-    await expect(() => schnorrSign(BIG_MODULUS, 123n)).rejects.toThrow('secretKey must be less than Grumpkin scalar modulus');
+    // Grumpkin's scalar field = BN254's base field (they form a 2-cycle)
+    // This is the BN254 scalar field modulus, which is > Grumpkin's scalar modulus
+    const BN254_SCALAR_MODULUS = 21888242871839275222246405745257275088696311157297823662689037894645226208583n;
+    await expect(() => schnorrSign(BN254_SCALAR_MODULUS, 123n)).rejects.toThrow('secretKey must be less than Grumpkin scalar modulus');
   });
 });

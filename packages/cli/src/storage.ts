@@ -40,6 +40,8 @@ export class CredentialStorage {
   private data: StorageData;
 
   constructor(storagePath?: string) {
+    // Note: Directory name kept as '.zk-session' for backward compatibility
+    // with existing credential stores, even though packages use @demo/* scope
     this.storagePath = storagePath ?? join(homedir(), '.zk-session', 'credentials.json');
     this.data = this.load();
   }

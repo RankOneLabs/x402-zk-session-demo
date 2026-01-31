@@ -59,7 +59,7 @@ export class ProofCache {
     }
     
     // Check expiration
-    if (cached.expiresAt < Date.now() / 1000) {
+    if (cached.expiresAt < Math.floor(Date.now() / 1000)) {
       this.cache.delete(key);
       return undefined;
     }
@@ -94,7 +94,7 @@ export class ProofCache {
    * Remove expired entries and oldest if still at capacity
    */
   prune(): number {
-    const now = Date.now() / 1000;
+    const now = Math.floor(Date.now() / 1000);
     let pruned = 0;
     
     // Remove expired
