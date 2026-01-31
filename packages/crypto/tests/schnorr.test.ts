@@ -35,15 +35,14 @@ describe('Schnorr Signatures', () => {
     expect(typeof signature.r.y).toBe('bigint');
   });
 
-  // Verification is stubbed in JS, so we skip verification logic tests
-  it.skip('should verify a valid signature', async () => {
+  it('should throw error when calling verifying', async () => {
     const { secretKey, publicKey } = await generateKeypair();
     const message = 12345n;
 
     const signature = await schnorrSign(secretKey, message);
-    const valid = await schnorrVerify(publicKey, message, signature);
 
-    expect(valid).toBe(true);
+    await expect(() => schnorrVerify(publicKey, message, signature))
+      .rejects.toThrow('schnorrVerify is not implemented in JS. Verification must be performed via the Noir circuit.');
   });
 
   it('different messages should produce different signatures', async () => {

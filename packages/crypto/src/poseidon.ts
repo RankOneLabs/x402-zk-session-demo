@@ -53,8 +53,20 @@ export function poseidonHash5(a: bigint, b: bigint, c: bigint, d: bigint, e: big
 }
 
 /**
- * Poseidon hash for 7 inputs (matches Noir's custom chaining in main.nr)
- * Split into hash4(a,b,c,d) and hash3(e,f,g), then hash2(h1, h2)
+ * Poseidon hash for 7 inputs.
+ * 
+ * IMPLEMENTATION NOTE:
+ * Uses a hierarchical chaining approach: hash2(hash4(a..d), hash3(e..g)).
+ * 
+ * WARNING: This is a BREAKING CHANGE from the previous sponge construction.
+ * This specific chaining method was chosen to match the manual implementation
+ * in the Noir circuit (`main.nr`), ensuring bit-for-bit compatibility across
+ * the JS and Noir environments.
+ * 
+ * Logic:
+ * h1 = hash_4(a, b, c, d)
+ * h2 = hash_3(e, f, g)
+ * result = hash_2(h1, h2)
  */
 export function poseidonHash7(a: bigint, b: bigint, c: bigint, d: bigint, e: bigint, f: bigint, g: bigint): bigint {
   const h1 = poseidon4([a, b, c, d]) as bigint;

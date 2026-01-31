@@ -255,7 +255,15 @@ export class ZkSessionClient {
         const now = Math.floor(Date.now() / 1000);
         const bucket = Math.floor(now / this.config.timeBucketSeconds);
         const timeBucket = bucket * this.config.timeBucketSeconds;
-        const index = bucket % credential.maxPresentations;
+
+        // Use hash(timeBucket, serviceId, obtainedAt) for deterministic but unpredictable index
+        const hash = poseidonHash3(
+          BigInt(timeBucket),
+          BigInt(credential.serviceId),
+          BigInt(credential.obtainedAt)
+        );
+
+        const index = Number(hash % BigInt(credential.maxPresentations));
         return { index, timeBucket };
       }
 

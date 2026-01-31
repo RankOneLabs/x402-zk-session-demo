@@ -43,13 +43,7 @@ export async function generateKeypair(): Promise<{ secretKey: bigint; publicKey:
   // We need random mod Fq.
 
   // Custom random generation for Fq
-  const bytes = new Uint8Array(64);
-  crypto.getRandomValues(bytes);
-  let value = 0n;
-  for (const byte of bytes) {
-    value = (value << 8n) | BigInt(byte);
-  }
-  const secretKey = value % GRUMPKIN_SCALAR_MODULUS;
+  const secretKey = randomGrumpkinScalar();
 
   const publicKey = await derivePublicKey(secretKey);
 
@@ -100,13 +94,7 @@ export async function schnorrSign(secretKey: bigint, message: bigint): Promise<S
   const backend = await getBb();
 
   // Generate random nonce k mod Fq
-  const bytes = new Uint8Array(64);
-  crypto.getRandomValues(bytes);
-  let val = 0n;
-  for (const byte of bytes) {
-    val = (val << 8n) | BigInt(byte);
-  }
-  const k = val % GRUMPKIN_SCALAR_MODULUS;
+  const k = randomGrumpkinScalar();
 
   // R = k * G
   const commR = await backend.pedersenCommit([new Fr(k), new Fr(0n)], 0);
@@ -152,8 +140,7 @@ export async function schnorrVerify(
 ): Promise<boolean> {
   // Cannot verify in JS without arbitrary point multiplication.
   // bb.js pedersenCommit only does scalars * generators.
-  console.warn("schnorrVerify is not implemented in JS (requires arbitrary point operations). Assuming valid for demo purposes or relying on ZK proof.");
-  return true;
+  throw new Error("schnorrVerify is not implemented in JS. Verification must be performed via the Noir circuit.");
 }
 
 // Helper: Convert bb.js Fr to BigInt
@@ -163,4 +150,23 @@ function frToBigInt(fr: { value: Uint8Array }): bigint {
     result = (result << 8n) | BigInt(byte);
   }
   return result;
+}
+
+/**
+ * Generate a random scalar in the Grumpkin scalar field.
+ * 
+ * Uses 64 bytes (512 bits) of randomness reduced modulo the ~254-bit scalar modulus.
+ * 
+ * NOTE: This introduces a negligible bias (approx 2^-258), which is acceptable
+ * for this use case. A uniform rejection sampling approach would be strictly
+ * correct but this reduction is standard practice for field elements.
+ */
+function randomGrumpkinScalar(): bigint {
+  const bytes = new Uint8Array(64);
+  crypto.getRandomValues(bytes);
+  let value = 0n;
+  for (const byte of bytes) {
+    value = (value << 8n) | BigInt(byte);
+  }
+  return value % GRUMPKIN_SCALAR_MODULUS;
 }
