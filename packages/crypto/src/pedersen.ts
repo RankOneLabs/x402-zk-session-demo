@@ -41,13 +41,12 @@ function toFr(value: bigint): Fr {
 /**
  * Convert Fr result to bigint
  */
+/**
+ * Convert Fr result to bigint safely
+ */
 function fromFr(fr: Fr): bigint {
-  // Fr.value is a Uint8Array, convert to bigint
-  let result = 0n;
-  for (const byte of fr.value) {
-    result = (result << 8n) | BigInt(byte);
-  }
-  return result;
+  // Use toString() to handle internal representation (Montgomery form)
+  return BigInt(fr.toString());
 }
 
 /**
@@ -65,13 +64,13 @@ function fromFr(fr: Fr): bigint {
 export async function pedersenCommit(secret: bigint, blinding?: bigint): Promise<Commitment> {
   const blindingFactor = blinding ?? randomFieldElement();
   const api = await ensureBb();
-  
+
   // Pedersen commit using Barretenberg's generators
   const inputs = [
     toFr(toField(secret)),
     toFr(toField(blindingFactor)),
   ];
-  
+
   const result = api.pedersenCommit(inputs, PEDERSEN_GENERATOR_INDEX);
 
   return {
@@ -96,14 +95,14 @@ export function pedersenCommitSync(secret: bigint, blinding?: bigint): Commitmen
   if (!bbInitialized) {
     throw new Error('Barretenberg not initialized. Call await initPedersen() before using pedersenCommitSync().');
   }
-  
+
   const blindingFactor = blinding ?? randomFieldElement();
-  
+
   const inputs = [
     toFr(toField(secret)),
     toFr(toField(blindingFactor)),
   ];
-  
+
   const result = bb.pedersenCommit(inputs, PEDERSEN_GENERATOR_INDEX);
 
   return {

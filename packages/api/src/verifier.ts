@@ -41,12 +41,12 @@ export interface ProofVerificationResult {
  */
 export class ZkVerifier {
   private backend: UltraHonkBackend | null = null;
-  private circuitBytecode: string | null = null;
+  private circuit: any | null = null;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
-  
-  constructor(private config: VerifierConfig = {}) {}
-  
+
+  constructor(private config: VerifierConfig = {}) { }
+
   /**
    * Initialize the verifier with the circuit
    */
@@ -55,38 +55,38 @@ export class ZkVerifier {
     if (this.initPromise) {
       return this.initPromise;
     }
-    
+
     if (this.initialized) {
       return;
     }
-    
+
     this.initPromise = this._doInitialize();
     return this.initPromise;
   }
-  
+
   private async _doInitialize(): Promise<void> {
     try {
       // Find circuit path
       const circuitPath = this.config.circuitPath ?? this.findCircuitPath();
-      
+
       if (!circuitPath || !existsSync(circuitPath)) {
         throw new Error(`Circuit not found at ${circuitPath}. Run 'nargo compile' first.`);
       }
-      
+
       console.log(`[ZkVerifier] Loading circuit from ${circuitPath}`);
-      
+
       // Load the compiled circuit JSON
       const circuitJson = JSON.parse(readFileSync(circuitPath, 'utf-8'));
-      this.circuitBytecode = circuitJson.bytecode;
-      
-      if (!this.circuitBytecode) {
+      this.circuit = circuitJson;
+
+      if (!this.circuit.bytecode) {
         throw new Error('Circuit JSON does not contain bytecode');
       }
-      
-      // Create the UltraHonk backend
+
+      // Create the UltraHonk backend (takes bytecode string, not full circuit)
       console.log('[ZkVerifier] Initializing UltraHonk backend...');
-      this.backend = new UltraHonkBackend(this.circuitBytecode);
-      
+      this.backend = new UltraHonkBackend(this.circuit.bytecode);
+
       this.initialized = true;
       console.log('[ZkVerifier] Initialized successfully');
     } catch (error) {
@@ -96,7 +96,7 @@ export class ZkVerifier {
       throw error;
     }
   }
-  
+
   /**
    * Clean up resources (destroy backend if created)
    */
@@ -109,31 +109,32 @@ export class ZkVerifier {
       }
       this.backend = null;
     }
-    this.circuitBytecode = null;
+    this.circuit = null;
     this.initialized = false;
     this.initPromise = null;
   }
-  
+
   /**
    * Find the circuit path by searching common locations
    */
   private findCircuitPath(): string | null {
     const searchPaths = [
       // Relative to this file (api/src/)
+      join(__dirname, 'circuits/x402_zk_session.json'),
       join(__dirname, '../../../circuits/target/x402_zk_session.json'),
       // Relative to project root
       join(process.cwd(), 'circuits/target/x402_zk_session.json'),
     ];
-    
+
     for (const path of searchPaths) {
       if (existsSync(path)) {
         return path;
       }
     }
-    
+
     return searchPaths[0]; // Return first path for error message
   }
-  
+
   /**
    * Verify a ZK proof
    * 
@@ -146,28 +147,28 @@ export class ZkVerifier {
     const NUM_PUBLIC_INPUTS = 5;
     const NUM_PUBLIC_OUTPUTS = 2;
     const REQUIRED_LENGTH = NUM_PUBLIC_INPUTS + NUM_PUBLIC_OUTPUTS;
-    
+
     if (proofData.publicInputs.length < REQUIRED_LENGTH) {
-      return { 
-        valid: false, 
-        error: `Invalid publicInputs length: expected >= ${REQUIRED_LENGTH}, got ${proofData.publicInputs.length}` 
+      return {
+        valid: false,
+        error: `Invalid publicInputs length: expected >= ${REQUIRED_LENGTH}, got ${proofData.publicInputs.length}`
       };
     }
-    
+
     // Extract outputs (after the public inputs)
     const originToken = proofData.publicInputs[NUM_PUBLIC_INPUTS];
     const tierHex = proofData.publicInputs[NUM_PUBLIC_INPUTS + 1];
-    
+
     // Validate extracted values exist (TypeScript narrowing)
     if (originToken === undefined || tierHex === undefined) {
       return { valid: false, error: 'Missing origin_token or tier in publicInputs' };
     }
-    
+
     const tier = parseInt(tierHex, 16);
     if (isNaN(tier)) {
       return { valid: false, error: 'Invalid tier value in publicInputs' };
     }
-    
+
     // Skip verification in dev mode
     if (this.config.skipVerification) {
       console.log('[ZkVerifier] Skipping verification (dev mode)');
@@ -176,27 +177,32 @@ export class ZkVerifier {
         outputs: { originToken, tier },
       };
     }
-    
+
     // Ensure initialized
     await this.initialize();
-    
+
     if (!this.backend) {
       return { valid: false, error: 'Verifier not initialized' };
     }
-    
+
     try {
       // Verify the proof
       // Public inputs order: service_id, current_time, origin_id, issuer_pubkey_x, issuer_pubkey_y
       // Public outputs: origin_token, tier
+      // UltraHonkBackend expects proof as Uint8Array, not Buffer
+      const proofArray = proofData.proof instanceof Uint8Array 
+        ? proofData.proof 
+        : new Uint8Array(proofData.proof);
+      
       const isValid = await this.backend.verifyProof({
-        proof: proofData.proof,
+        proof: proofArray,
         publicInputs: proofData.publicInputs,
       });
-      
+
       if (!isValid) {
         return { valid: false, error: 'Proof verification failed' };
       }
-      
+
       // Outputs already extracted and validated above
       return {
         valid: true,
@@ -208,7 +214,7 @@ export class ZkVerifier {
       return { valid: false, error: message };
     }
   }
-  
+
   /**
    * Check if the verifier is initialized
    */
@@ -226,17 +232,17 @@ export function parseProofFromRequest(proofB64: string): ProofData | null {
   try {
     const decoded = Buffer.from(proofB64, 'base64').toString('utf-8');
     const parsed = JSON.parse(decoded);
-    
+
     // Validate proof field exists and is non-empty
     if (!parsed.proof) {
       return null;
     }
-    
+
     // Validate publicInputs is an array
     if (!Array.isArray(parsed.publicInputs)) {
       return null;
     }
-    
+
     // Parse proof bytes
     let proofBytes: Uint8Array;
     if (typeof parsed.proof === 'string') {
@@ -258,7 +264,7 @@ export function parseProofFromRequest(proofB64: string): ProofData | null {
     } else {
       return null;
     }
-    
+
     return {
       proof: proofBytes,
       publicInputs: parsed.publicInputs,

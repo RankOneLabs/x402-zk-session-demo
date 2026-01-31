@@ -31,6 +31,10 @@ export interface ZkSessionConfig {
   minTier?: number;
   /** Skip proof verification (for development) */
   skipProofVerification?: boolean;
+  /** Issuer URL for 402 challenge */
+  issuerUrl?: string;
+  /** Price info for 402 challenge (e.g. "1.00 USDC") */
+  priceInfo?: string;
 }
 
 /** Discriminated union for session verification results */
@@ -92,6 +96,28 @@ export class ZkSessionMiddleware {
       const result = await this.verifyRequest(req);
 
       if (!result.valid) {
+        // If missing headers, return 402 Discovery challenge
+        if (result.error === 'Missing ZK session headers') {
+          const challenge = [
+            `x402-zk-session realm="api"`,
+            `service_id="${this.config.serviceId}"`,
+            this.config.issuerUrl ? `issuer="${this.config.issuerUrl}"` : '',
+            this.config.priceInfo ? `price="${this.config.priceInfo}"` : '',
+          ].filter(Boolean).join(', ');
+
+          res.set('WWW-Authenticate', challenge);
+          res.status(402).json({
+            error: 'Payment Required',
+            message: 'This resource is protected. Please obtain a credential.',
+            discovery: {
+              serviceId: this.config.serviceId.toString(),
+              issuerUrl: this.config.issuerUrl,
+              price: this.config.priceInfo
+            }
+          });
+          return;
+        }
+
         res.status(401).json({ error: result.error });
         return;
       }
@@ -225,8 +251,8 @@ export class ZkSessionMiddleware {
    * Compute origin_id for a request (hash of pathname)
    */
   private computeOriginId(req: Request): bigint {
-    // Use pathname as origin identifier
-    const pathname = new URL(req.url, `http://${req.headers.host}`).pathname;
+    // Use originalUrl to get the full path (req.url is stripped in mounted routers)
+    const pathname = new URL(req.originalUrl, `http://${req.headers.host}`).pathname;
     return stringToField(pathname);
   }
 

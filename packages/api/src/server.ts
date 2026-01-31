@@ -7,6 +7,7 @@
 import express, { type Request, type Response } from 'express';
 import cors from 'cors';
 import path from 'node:path';
+import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import { ZkSessionMiddleware, type ZkSessionConfig } from './middleware.js';
 import { hexToBigInt } from '@demo/crypto';
@@ -114,7 +115,9 @@ export function createApiServer(config: ApiServerConfig) {
     app,
     start: () => {
       return new Promise<void>((resolve) => {
-        app.listen(config.port, () => {
+        // Use http.createServer to allow larger headers for UltraHonk proofs (~16-20KB)
+        const server = http.createServer({ maxHeaderSize: 65536 }, app);
+        server.listen(config.port, () => {
           console.log(`[API] Server running on port ${config.port}`);
           console.log(`[API] Service ID: ${config.zkSession.serviceId}`);
           console.log(`[API] Rate limit: ${config.zkSession.rateLimit.maxRequestsPerToken} requests per ${config.zkSession.rateLimit.windowSeconds}s`);
@@ -164,6 +167,8 @@ if (isMain) {
       },
       minTier: parseInt(process.env.MIN_TIER ?? '0'),
       skipProofVerification,
+      issuerUrl: process.env.ISSUER_URL ?? 'http://localhost:3001',
+      priceInfo: '1.00 USDC',
     },
   };
 

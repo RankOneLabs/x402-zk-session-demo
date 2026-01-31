@@ -13,6 +13,7 @@ function createMockRequest(headers: Record<string, string> = {}, url = '/api/tes
       ...headers,
     },
     url,
+    originalUrl: url, // Express sets originalUrl for route matching
   };
 }
 
@@ -356,12 +357,19 @@ describe('ZkSessionMiddleware', () => {
     });
 
     it('should reject mismatched issuer pubkey X', async () => {
+      const originId = stringToField('/api/test');
       const middleware = new ZkSessionMiddleware({
         ...defaultConfig,
         issuerPubkey: { x: 100n, y: 2n },
         skipProofVerification: false,
       });
-      const headers = createValidHeaders('0xabc', 1, { issuerPubkeyX: 1n }); // Wrong X
+      // Include all correct values EXCEPT pubkey X
+      const headers = createValidHeaders('0xabc', 1, { 
+        serviceId: 1n,
+        originId,
+        issuerPubkeyX: 999n, // Wrong X - config expects 100n
+        issuerPubkeyY: 2n,   // Correct Y
+      });
       const req = createMockRequest(headers);
 
       const result = await middleware.verifyRequest(req as Request);
@@ -373,12 +381,19 @@ describe('ZkSessionMiddleware', () => {
     });
 
     it('should reject mismatched issuer pubkey Y', async () => {
+      const originId = stringToField('/api/test');
       const middleware = new ZkSessionMiddleware({
         ...defaultConfig,
         issuerPubkey: { x: 1n, y: 200n },
         skipProofVerification: false,
       });
-      const headers = createValidHeaders('0xabc', 1, { issuerPubkeyY: 2n }); // Wrong Y
+      // Include all correct values EXCEPT pubkey Y
+      const headers = createValidHeaders('0xabc', 1, { 
+        serviceId: 1n,
+        originId,
+        issuerPubkeyX: 1n,   // Correct X
+        issuerPubkeyY: 999n, // Wrong Y - config expects 200n
+      });
       const req = createMockRequest(headers);
 
       const result = await middleware.verifyRequest(req as Request);
@@ -501,8 +516,11 @@ describe('ZkSessionMiddleware', () => {
       await middleware.middleware()(req, res as Response, next);
 
       expect(next).not.toHaveBeenCalled();
-      expect(res.statusCode).toBe(401);
-      expect(res.jsonData).toEqual({ error: 'Missing ZK session headers' });
+      expect(res.statusCode).toBe(402); // x402: Payment Required
+      expect(res.jsonData).toMatchObject({ 
+        error: 'Payment Required',
+        message: 'This resource is protected. Please obtain a credential.',
+      });
     });
 
     it('should set rate limit headers', async () => {
@@ -637,16 +655,23 @@ describe('ZkSessionMiddleware', () => {
         skipProofVerification: false,
       });
 
+      const originId = stringToField('/api/test');
       const headers = createValidHeaders('0xabc', 1, {
-        originId: stringToField('/api/test'),
+        serviceId: 1n,
+        originId,
+        issuerPubkeyX: 1n,
+        issuerPubkeyY: 2n,
       });
 
       const req = createMockRequest(headers, '/api/test');
       const result = await middleware.verifyRequest(req as Request);
 
       // Will fail on proof verification, not origin ID mismatch
+      // Note: This passes public input validation but fails on actual ZK proof verification
+      expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).not.toBe('Public input mismatch at index 2');
+        // Should fail on proof verification, not public input mismatch
+        expect(result.error).not.toContain('Public input mismatch');
       }
 
       await middleware.destroy();
