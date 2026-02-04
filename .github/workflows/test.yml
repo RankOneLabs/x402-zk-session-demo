@@ -35,6 +35,6 @@ jobs:
       - name: Run unit tests
         run: |
           npm test --workspace=@demo/crypto
-          npm test --workspace=@demo/issuer
+          npm test --workspace=@demo/facilitator
           npm test --workspace=@demo/api
           npm test --workspace=@demo/cli
