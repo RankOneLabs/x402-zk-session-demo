@@ -121,7 +121,7 @@ describe('End-to-End Flow', () => {
             serviceId: 1001n,
             secretKey: 123456789n,
             tiers: [
-                { minAmountCents: 100, tier: 1, maxPresentations: 10, durationSeconds: 3600 }
+                { minAmountCents: 10, tier: 1, maxPresentations: 10, durationSeconds: 3600 }
             ],
             paymentVerification: {
                 chainId: 31337,
