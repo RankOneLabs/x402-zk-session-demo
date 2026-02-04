@@ -4,6 +4,7 @@ import { createApiServer, type ApiServerConfig } from '../src/server.js';
 
 /**
  * Helper to create valid ZK session headers
+ * Uses the Authorization: ZKSession format (spec §8.1)
  * Uses skip mode so proof content doesn't matter
  */
 function createZkHeaders(originToken: string, tier: number) {
@@ -18,9 +19,7 @@ function createZkHeaders(originToken: string, tier: number) {
   const proofB64 = Buffer.from(JSON.stringify(proofData)).toString('base64');
   
   return {
-    'zk-session-proof': proofB64,
-    'zk-session-token': originToken,
-    'zk-session-tier': tier.toString(),
+    'Authorization': `ZKSession pedersen-schnorr-bn254:${proofB64}`,
   };
 }
 
@@ -36,6 +35,7 @@ describe('API Server', () => {
       },
       minTier: 0,
       skipProofVerification: true, // Skip for unit tests
+      facilitatorUrl: 'http://localhost:3001/settle',
     },
   };
 
@@ -65,38 +65,40 @@ describe('API Server', () => {
   });
 
   describe('Protected endpoints - authentication', () => {
-    it('should reject requests without ZK headers', async () => {
+    it('should return 402 Payment Required without Authorization header', async () => {
       const { app } = createApiServer(config);
       
       const res = await request(app).get('/api/whoami');
       
       expect(res.status).toBe(402); // x402: Payment Required
-      expect(res.body.error).toBe('Payment Required');
+      expect(res.body.x402).toBeDefined();
+      expect(res.body.x402.payment_requirements).toBeDefined();
     });
 
-    it('should reject requests with missing proof header', async () => {
+    it('should return 401 with invalid Authorization format', async () => {
       const { app } = createApiServer(config);
       
       const res = await request(app)
         .get('/api/whoami')
-        .set('zk-session-token', '0xabc')
-        .set('zk-session-tier', '1');
+        .set('Authorization', 'Bearer sometoken');
       
-      expect(res.status).toBe(402); // x402: Payment Required
-      expect(res.body.error).toBe('Payment Required');
-    });
-
-    it('should reject requests with invalid tier', async () => {
-      const { app } = createApiServer(config);
-      const headers = createZkHeaders('0xabc123', 1);
-      headers['zk-session-tier'] = 'not-a-number';
-      
-      const res = await request(app)
-        .get('/api/whoami')
-        .set(headers);
-      
+      // When Authorization header is present but invalid, return 401 with WWW-Authenticate
       expect(res.status).toBe(401);
-      expect(res.body.error).toBe('Invalid tier');
+      expect(res.body.error).toBe('invalid_zk_proof');
+      expect(res.headers['www-authenticate']).toBe('ZKSession schemes="pedersen-schnorr-bn254"');
+    });
+
+    it('should reject requests with unsupported scheme', async () => {
+      const { app } = createApiServer(config);
+      const proofData = { proof: 'test', publicInputs: ['0x1', '0x2', '0x3', '0x4', '0x5', '0xabc', '0x1'] };
+      const proofB64 = Buffer.from(JSON.stringify(proofData)).toString('base64');
+      
+      const res = await request(app)
+        .get('/api/whoami')
+        .set('Authorization', `ZKSession unknown-scheme:${proofB64}`);
+      
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('unsupported_zk_scheme');
     });
 
     it('should accept requests with valid ZK headers', async () => {
@@ -129,8 +131,8 @@ describe('API Server', () => {
         .get('/api/whoami')
         .set(headers);
       
-      expect(res.status).toBe(401);
-      expect(res.body.error).toBe('Tier 1 below minimum 2');
+      expect(res.status).toBe(403);
+      expect(res.body.error).toBe('tier_insufficient');
     });
 
     it('should accept tier at minimum', async () => {
@@ -207,7 +209,7 @@ describe('API Server', () => {
       const res = await request(app).get('/api/whoami').set(headers);
       
       expect(res.status).toBe(429);
-      expect(res.body.error).toBe('Rate limit exceeded');
+      expect(res.body.error).toBe('rate_limited');
     });
 
     it('should rate limit independently per origin token', async () => {

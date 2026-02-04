@@ -255,6 +255,12 @@ export class ZkSessionMiddleware {
       // Layout: [service_id, current_time, origin_id, issuer_pubkey_x, issuer_pubkey_y, origin_token, tier]
       const tier = proofData.publicInputs[6] ? Number(BigInt(proofData.publicInputs[6])) : 0;
       const originToken = proofData.publicInputs[5] ?? '0x0';
+      
+      // Still check minimum tier requirement even in skip mode
+      if (tier < (this.config.minTier ?? 0)) {
+        return { valid: false, errorCode: 'tier_insufficient', message: `Tier ${tier} below minimum ${this.config.minTier}` };
+      }
+      
       return { valid: true, tier, originToken };
     }
 
