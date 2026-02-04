@@ -41,11 +41,11 @@ async function main() {
     const discovery = await client.discover(`${API_URL}/api/whoami`);
     
     console.log('✓ Received 402 response with zk_session extension:\n');
-    console.log('  x402.payment_requirements:');
+    console.log('  accepts[0] (payment requirements):');
     console.log(`    - amount: ${discovery.paymentAmount}`);
     console.log(`    - asset: ${discovery.paymentAsset}`);
     console.log(`    - facilitator: ${discovery.facilitatorUrl}`);
-    console.log('  x402.extensions.zk_session:');
+    console.log('  extensions.zk_session:');
     console.log(`    - schemes: [${discovery.schemes.join(', ')}]`);
     console.log(`    - facilitator_pubkey: ${discovery.facilitatorPubkey.x.slice(0, 20)}...`);
     console.log();

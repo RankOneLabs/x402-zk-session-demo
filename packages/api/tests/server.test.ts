@@ -71,8 +71,10 @@ describe('API Server', () => {
       const res = await request(app).get('/api/whoami');
       
       expect(res.status).toBe(402); // x402: Payment Required
-      expect(res.body.x402).toBeDefined();
-      expect(res.body.x402.payment_requirements).toBeDefined();
+      expect(res.body.x402Version).toBe(2);
+      expect(res.body.accepts).toBeDefined();
+      expect(res.body.accepts.length).toBeGreaterThan(0);
+      expect(res.body.accepts[0].scheme).toBe('exact');
     });
 
     it('should return 401 with invalid Authorization format', async () => {

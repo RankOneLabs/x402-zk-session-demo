@@ -22,7 +22,7 @@ import {
   bigIntToHex, 
   addSchemePrefix,
   type Point,
-  type X402Response,
+  type X402WithZKSessionResponse,
   type ZKSessionError,
   type ZKSessionErrorCode,
   ERROR_CODE_TO_STATUS,
@@ -45,8 +45,14 @@ export interface ZkSessionConfig {
   facilitatorUrl: string;
   /** Payment amount in smallest unit (e.g., "100000" for 0.10 USDC) */
   paymentAmount?: string;
-  /** Payment asset (e.g., "USDC") */
+  /** Payment asset address (e.g., USDC contract address) */
   paymentAsset?: string;
+  /** Payment recipient address (payTo) */
+  paymentRecipient?: string;
+  /** Network in CAIP-2 format (e.g., "eip155:84532" for Base Sepolia) */
+  network?: string;
+  /** Resource description for 402 response */
+  resourceDescription?: string;
 }
 
 /** Discriminated union for session verification results */
@@ -100,21 +106,33 @@ export class ZkSessionMiddleware {
 
   /**
    * Build x402 Payment Required response (spec §6)
+   * Uses @x402/core PaymentRequired format with accepts[] array
    */
-  private build402Response(): X402Response {
+  private build402Response(resourceUrl: string): X402WithZKSessionResponse {
     return {
-      x402: {
-        payment_requirements: {
+      x402Version: 2,
+      resource: {
+        url: resourceUrl,
+        description: this.config.resourceDescription ?? 'ZK Session protected resource',
+        mimeType: 'application/json',
+      },
+      accepts: [
+        {
+          scheme: 'exact',
+          network: (this.config.network ?? 'eip155:84532') as `${string}:${string}`,
+          asset: this.config.paymentAsset ?? '0x036CbD53842c5426634e7929541eC2318f3dCF7e', // Base Sepolia USDC
           amount: this.config.paymentAmount ?? '100000',
-          asset: this.config.paymentAsset ?? 'USDC',
-          facilitator: this.config.facilitatorUrl,
+          payTo: this.config.paymentRecipient ?? this.config.facilitatorUrl,
+          maxTimeoutSeconds: 300,
+          extra: {},
         },
-        extensions: {
-          zk_session: {
-            version: '0.1',
-            schemes: ['pedersen-schnorr-bn254'],
-            facilitator_pubkey: this.getFacilitatorPubkeyPrefixed(),
-          },
+      ],
+      extensions: {
+        zk_session: {
+          version: '0.1',
+          schemes: ['pedersen-schnorr-bn254'],
+          facilitator_pubkey: this.getFacilitatorPubkeyPrefixed(),
+          facilitator_url: this.config.facilitatorUrl,
         },
       },
     };
@@ -150,7 +168,8 @@ export class ZkSessionMiddleware {
 
         // 402: Payment Required - return x402 extension format (spec §6)
         if (status === 402 || result.errorCode === 'invalid_zk_proof' && !req.headers.authorization) {
-          res.status(402).json(this.build402Response());
+          const resourceUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
+          res.status(402).json(this.build402Response(resourceUrl));
           return;
         }
 

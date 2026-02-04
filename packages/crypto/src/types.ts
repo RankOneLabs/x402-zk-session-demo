@@ -1,7 +1,24 @@
 /**
  * Common types for cryptographic operations
  * Compliant with x402 zk-session spec v0.1.0
+ * 
+ * Uses @x402/core types for payment layer, extends with zk_session types.
  */
+
+// Re-export x402 core types for convenience
+export type {
+  PaymentRequired,
+  PaymentRequirements,
+  PaymentPayload,
+  VerifyResponse,
+  SettleResponse,
+  Network,
+} from '@x402/core/types';
+
+import type {
+  PaymentRequired,
+  PaymentRequirements,
+} from '@x402/core/types';
 
 // =============================================================================
 // Core Cryptographic Types
@@ -67,24 +84,31 @@ export interface ProofOutputs {
 }
 
 // =============================================================================
-// x402 Protocol Types (spec §6, §7, §13)
+// x402 Protocol Types with ZK Session Extension (spec §6, §7, §13)
 // =============================================================================
-
-/** x402 payment requirements in 402 response */
-export interface X402PaymentRequirements {
-  amount: string;
-  asset: string;
-  facilitator: string;
-}
 
 /** zk_session extension in 402 response (spec §6) */
 export interface ZKSessionExtension {
   version: '0.1';
   schemes: ZKSessionScheme[];
   facilitator_pubkey: string; // scheme-prefixed: "pedersen-schnorr-bn254:0x..."
+  facilitator_url?: string;   // URL to send settlement requests
 }
 
-/** Full x402 response body for 402 Payment Required (spec §6) */
+/**
+ * Extended x402 PaymentRequired with zk_session extension
+ * This is what the API returns for 402 Payment Required responses.
+ */
+export interface X402WithZKSessionResponse extends PaymentRequired {
+  extensions: {
+    zk_session: ZKSessionExtension;
+  } & Record<string, unknown>;
+}
+
+/**
+ * @deprecated Use X402WithZKSessionResponse instead
+ * Legacy x402 response format - kept for backward compatibility during migration
+ */
 export interface X402Response {
   x402: {
     payment_requirements: X402PaymentRequirements;
@@ -94,7 +118,17 @@ export interface X402Response {
   };
 }
 
-/** Payment request to facilitator (spec §7.2) */
+/**
+ * @deprecated Use PaymentRequirements from @x402/core instead
+ * Legacy payment requirements type
+ */
+export interface X402PaymentRequirements {
+  amount: string;
+  asset: string;
+  facilitator: string;
+}
+
+/** Payment request to facilitator with zk_session commitment (spec §7.2) */
 export interface X402PaymentRequest {
   payment: unknown; // x402 payment proof (opaque to zk-session layer)
   zk_session: {

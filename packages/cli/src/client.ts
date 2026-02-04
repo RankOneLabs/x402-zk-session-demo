@@ -14,7 +14,7 @@ import {
   hexToBigInt,
   addSchemePrefix,
   parseSchemePrefix,
-  type X402Response,
+  type X402WithZKSessionResponse,
   type CredentialWireFormat,
 } from '@demo/crypto';
 import { Noir } from '@noir-lang/noir_js';
@@ -73,14 +73,21 @@ export class ZkSessionClient {
 
   /**
    * Parse a 402 Payment Required response (spec §6)
+   * Parses x402 PaymentRequired format with accepts[] array
    */
-  parse402Response(body: X402Response): Parsed402Response {
-    const { x402 } = body;
-    if (!x402?.extensions?.zk_session) {
+  parse402Response(body: X402WithZKSessionResponse): Parsed402Response {
+    // Validate zk_session extension exists
+    if (!body.extensions?.zk_session) {
       throw new Error('Response does not contain zk_session extension');
     }
 
-    const zkSession = x402.extensions.zk_session;
+    const zkSession = body.extensions.zk_session;
+    
+    // Get first payment option from accepts array
+    if (!body.accepts || body.accepts.length === 0) {
+      throw new Error('Response does not contain any payment options');
+    }
+    const payment = body.accepts[0];
     
     // Parse scheme-prefixed facilitator pubkey
     const { scheme, value: pubkeyHex } = parseSchemePrefix(zkSession.facilitator_pubkey);
@@ -97,11 +104,14 @@ export class ZkSessionClient {
     const pubkeyX = '0x' + pubkeyBytes.slice(2, 66);
     const pubkeyY = '0x' + pubkeyBytes.slice(66, 130);
 
+    // Get facilitator URL from extension (spec §6) or fall back to payTo
+    const facilitatorUrl = zkSession.facilitator_url || payment.payTo;
+
     return {
-      facilitatorUrl: x402.payment_requirements.facilitator,
+      facilitatorUrl,
       facilitatorPubkey: { x: pubkeyX, y: pubkeyY },
-      paymentAmount: x402.payment_requirements.amount,
-      paymentAsset: x402.payment_requirements.asset,
+      paymentAmount: payment.amount,
+      paymentAsset: payment.asset,
       schemes: zkSession.schemes,
     };
   }
@@ -117,7 +127,7 @@ export class ZkSessionClient {
       throw new Error(`Expected 402 response, got ${response.status}`);
     }
 
-    const body = await response.json() as X402Response;
+    const body = await response.json() as X402WithZKSessionResponse;
     const parsed = this.parse402Response(body);
 
     // Cache the facilitator pubkey for later use

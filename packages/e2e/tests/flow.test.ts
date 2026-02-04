@@ -5,7 +5,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { createApiServer, ZkSessionMiddleware } from '@demo/api';
 import { ZkSessionClient } from '@demo/cli';
 import { createFacilitatorServer } from '@demo/facilitator';
-import { hexToBigInt, parseSchemePrefix, type X402Response } from '@demo/crypto';
+import { hexToBigInt, parseSchemePrefix, type X402WithZKSessionResponse } from '@demo/crypto';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -180,21 +180,26 @@ describe('End-to-End Flow', () => {
         const discoveryResponse = await fetch(`http://localhost:${API_PORT}/api/whoami`);
         expect(discoveryResponse.status).toBe(402);
 
-        const discoveryData = await discoveryResponse.json() as X402Response;
+        const discoveryData = await discoveryResponse.json() as X402WithZKSessionResponse;
         console.log('Discovery Data (x402 format):', JSON.stringify(discoveryData, null, 2));
 
-        // Verify x402 response format (spec §6)
-        expect(discoveryData.x402).toBeDefined();
-        expect(discoveryData.x402.payment_requirements).toBeDefined();
-        expect(discoveryData.x402.payment_requirements.facilitator).toBe(`http://localhost:${ISSUER_PORT}/settle`);
-        expect(discoveryData.x402.payment_requirements.asset).toBe('USDC');
-        expect(discoveryData.x402.extensions.zk_session).toBeDefined();
-        expect(discoveryData.x402.extensions.zk_session.version).toBe('0.1');
-        expect(discoveryData.x402.extensions.zk_session.schemes).toContain('pedersen-schnorr-bn254');
+        // Verify x402 PaymentRequired format (spec v2)
+        expect(discoveryData.x402Version).toBe(2);
+        expect(discoveryData.accepts).toBeDefined();
+        expect(discoveryData.accepts.length).toBeGreaterThan(0);
+        expect(discoveryData.accepts[0].scheme).toBe('exact');
+        expect(discoveryData.accepts[0].asset).toBe('USDC');
+        
+        // Verify zk_session extension
+        expect(discoveryData.extensions?.zk_session).toBeDefined();
+        expect(discoveryData.extensions!.zk_session!.version).toBe('0.1');
+        expect(discoveryData.extensions!.zk_session!.schemes).toContain('pedersen-schnorr-bn254');
 
-        // Parse facilitator URL and pubkey from 402 response
-        const facilitatorUrl = discoveryData.x402.payment_requirements.facilitator;
-        const requiredAmount = BigInt(discoveryData.x402.payment_requirements.amount);
+        // Parse facilitator URL and payment details from 402 response
+        const zkSession = discoveryData.extensions!.zk_session!;
+        const payment = discoveryData.accepts[0];
+        const facilitatorUrl = zkSession.facilitator_url || payment.payTo;
+        const requiredAmount = BigInt(payment.amount);
 
         // 1. Mint USDC to User
         // ABI for mint(address, uint256)

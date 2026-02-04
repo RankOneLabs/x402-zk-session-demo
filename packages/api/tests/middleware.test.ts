@@ -7,13 +7,16 @@ import { bigIntToHex, stringToField } from '@demo/crypto';
  * Create a mock Express request
  */
 function createMockRequest(headers: Record<string, string> = {}, url = '/api/test'): Partial<Request> {
+  const headersObj = {
+    host: 'localhost:3000',
+    ...headers,
+  };
   return {
-    headers: {
-      host: 'localhost:3000',
-      ...headers,
-    },
+    headers: headersObj,
     url,
     originalUrl: url, // Express sets originalUrl for route matching
+    protocol: 'http',
+    get: (name: string) => headersObj[name.toLowerCase() as keyof typeof headersObj],
   };
 }
 
@@ -515,8 +518,9 @@ describe('ZkSessionMiddleware', () => {
 
       expect(next).not.toHaveBeenCalled();
       expect(res.statusCode).toBe(402); // x402: Payment Required
-      // Check x402 response format
-      expect(res.jsonData).toHaveProperty('x402');
+      // Check x402 PaymentRequired format
+      expect(res.jsonData).toHaveProperty('x402Version', 2);
+      expect(res.jsonData).toHaveProperty('accepts');
     });
 
     it('should set rate limit headers', async () => {
