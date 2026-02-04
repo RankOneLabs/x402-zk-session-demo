@@ -2,6 +2,7 @@
  * ZK Session Verification Middleware
  * 
  * Verifies ZK proofs and enforces rate limits.
+ * Compliant with x402 zk-session spec v0.1.0
  * 
  * **Security Note (Replay Protection):**
  * Proofs are valid within a time window (60s past, 5s future) and could
@@ -16,7 +17,16 @@
  */
 
 import type { Request, Response, NextFunction } from 'express';
-import { stringToField, bigIntToHex, type Point } from '@demo/crypto';
+import { 
+  stringToField, 
+  bigIntToHex, 
+  addSchemePrefix,
+  type Point,
+  type X402Response,
+  type ZKSessionError,
+  type ZKSessionErrorCode,
+  ERROR_CODE_TO_STATUS,
+} from '@demo/crypto';
 import { RateLimiter, type RateLimitConfig } from './ratelimit.js';
 import { ZkVerifier, parseProofFromRequest } from './verifier.js';
 
@@ -31,16 +41,18 @@ export interface ZkSessionConfig {
   minTier?: number;
   /** Skip proof verification (for development) */
   skipProofVerification?: boolean;
-  /** Issuer URL for 402 challenge */
-  issuerUrl?: string;
-  /** Price info for 402 challenge (e.g. "1.00 USDC") */
-  priceInfo?: string;
+  /** Facilitator URL for settlement (spec §6) */
+  facilitatorUrl: string;
+  /** Payment amount in smallest unit (e.g., "100000" for 0.10 USDC) */
+  paymentAmount?: string;
+  /** Payment asset (e.g., "USDC") */
+  paymentAsset?: string;
 }
 
 /** Discriminated union for session verification results */
 export type SessionVerificationResult =
   | { valid: true; tier: number; originToken: string }
-  | { valid: false; error: string };
+  | { valid: false; errorCode: ZKSessionErrorCode; message?: string };
 
 // Extend Express Request to include ZK session info
 declare global {
@@ -78,6 +90,44 @@ export class ZkSessionMiddleware {
   }
 
   /**
+   * Get scheme-prefixed public key for 402 response
+   */
+  private getFacilitatorPubkeyPrefixed(): string {
+    const xHex = this.config.issuerPubkey.x.toString(16).padStart(64, '0');
+    const yHex = this.config.issuerPubkey.y.toString(16).padStart(64, '0');
+    return addSchemePrefix('pedersen-schnorr-bn254', `0x04${xHex}${yHex}`);
+  }
+
+  /**
+   * Build x402 Payment Required response (spec §6)
+   */
+  private build402Response(): X402Response {
+    return {
+      x402: {
+        payment_requirements: {
+          amount: this.config.paymentAmount ?? '100000',
+          asset: this.config.paymentAsset ?? 'USDC',
+          facilitator: this.config.facilitatorUrl,
+        },
+        extensions: {
+          zk_session: {
+            version: '0.1',
+            schemes: ['pedersen-schnorr-bn254'],
+            facilitator_pubkey: this.getFacilitatorPubkeyPrefixed(),
+          },
+        },
+      },
+    };
+  }
+
+  /**
+   * Build ZK session error response (spec §13)
+   */
+  private buildErrorResponse(code: ZKSessionErrorCode, message?: string): ZKSessionError {
+    return { error: code, message };
+  }
+
+  /**
    * Clean up resources (timers, verifier backend)
    */
   async destroy(): Promise<void> {
@@ -89,40 +139,29 @@ export class ZkSessionMiddleware {
   }
 
   /**
-   * Express middleware for ZK session verification
+   * Express middleware for ZK session verification (spec §11)
    */
   middleware() {
     return async (req: Request, res: Response, next: NextFunction) => {
       const result = await this.verifyRequest(req);
 
       if (!result.valid) {
-        // If missing headers, return 402 Discovery challenge
-        if (result.error === 'Missing ZK session headers') {
-          const challenge = [
-            `x402-zk-session realm="api"`,
-            `service_id="${this.config.serviceId}"`,
-            this.config.issuerUrl ? `issuer="${this.config.issuerUrl}"` : '',
-            this.config.priceInfo ? `price="${this.config.priceInfo}"` : '',
-          ].filter(Boolean).join(', ');
+        const status = ERROR_CODE_TO_STATUS[result.errorCode];
 
-          res.set('WWW-Authenticate', challenge);
-          res.status(402).json({
-            error: 'Payment Required',
-            message: 'This resource is protected. Please obtain a credential.',
-            discovery: {
-              serviceId: this.config.serviceId.toString(),
-              issuerUrl: this.config.issuerUrl,
-              price: this.config.priceInfo
-            }
-          });
+        // 402: Payment Required - return x402 extension format (spec §6)
+        if (status === 402 || result.errorCode === 'invalid_zk_proof' && !req.headers.authorization) {
+          res.status(402).json(this.build402Response());
           return;
         }
 
-        res.status(401).json({ error: result.error });
+        // 401: Add WWW-Authenticate header (spec §13)
+        if (status === 401) {
+          res.set('WWW-Authenticate', 'ZKSession schemes="pedersen-schnorr-bn254"');
+        }
+
+        res.status(status).json(this.buildErrorResponse(result.errorCode, result.message));
         return;
       }
-
-      // TypeScript now knows result is { valid: true; tier: number; originToken: string }
 
       // Check rate limit
       const rateLimit = this.rateLimiter.check(result.originToken);
@@ -133,7 +172,7 @@ export class ZkSessionMiddleware {
       res.set('X-RateLimit-Reset', rateLimit.resetAt.toString());
 
       if (!rateLimit.allowed) {
-        res.status(429).json({ error: 'Rate limit exceeded' });
+        res.status(429).json(this.buildErrorResponse('rate_limited', 'Rate limit exceeded'));
         return;
       }
 
@@ -148,41 +187,78 @@ export class ZkSessionMiddleware {
   }
 
   /**
-   * Verify a request's ZK session headers
+   * Parse Authorization header (spec §8.1)
+   * Format: Authorization: ZKSession <scheme>:<base64-proof>
+   */
+  private parseAuthorizationHeader(req: Request): { scheme: string; proofB64: string } | null {
+    const authHeader = req.headers.authorization;
+    if (!authHeader) {
+      return null;
+    }
+
+    // Check for ZKSession prefix
+    if (!authHeader.startsWith('ZKSession ')) {
+      return null;
+    }
+
+    const payload = authHeader.slice('ZKSession '.length);
+    const colonIdx = payload.indexOf(':');
+    if (colonIdx === -1) {
+      return null;
+    }
+
+    const scheme = payload.slice(0, colonIdx);
+    const proofB64 = payload.slice(colonIdx + 1);
+
+    return { scheme, proofB64 };
+  }
+
+  /**
+   * Verify a request's ZK session (spec §11)
+   * 
+   * Verification flow:
+   * 1. Parse Authorization header for ZKSession scheme
+   * 2. If missing → return error (middleware will return 402)
+   * 3. Extract scheme prefix from proof
+   * 4. If unsupported scheme → 400 unsupported_zk_scheme
+   * 5. Construct public inputs: (service_id, current_time, origin_id, facilitator_pubkey)
+   * 6. Verify proof
+   * 7. If invalid → 401 invalid_zk_proof
+   * 8. Extract outputs: (origin_token, tier)
+   * 9. Check tier meets endpoint requirement
+   * 10. If insufficient → 403 tier_insufficient
+   * 11. Return success (rate limiting handled by middleware)
    */
   async verifyRequest(req: Request): Promise<SessionVerificationResult> {
-    // Extract headers
-    const proofB64 = req.headers['zk-session-proof'] as string | undefined;
-    const originToken = req.headers['zk-session-token'] as string | undefined;
-    const tierStr = req.headers['zk-session-tier'] as string | undefined;
-
-    if (!proofB64 || !originToken || !tierStr) {
-      return { valid: false, error: 'Missing ZK session headers' };
+    // Step 1-2: Parse Authorization header
+    const authData = this.parseAuthorizationHeader(req);
+    if (!authData) {
+      // No authorization - will trigger 402 response
+      return { valid: false, errorCode: 'invalid_zk_proof', message: 'Missing Authorization header' };
     }
 
-    const tier = parseInt(tierStr, 10);
-    if (isNaN(tier)) {
-      return { valid: false, error: 'Invalid tier' };
+    // Step 3-4: Check scheme
+    if (authData.scheme !== 'pedersen-schnorr-bn254') {
+      return { valid: false, errorCode: 'unsupported_zk_scheme', message: `Unsupported scheme: ${authData.scheme}` };
     }
 
-    // Check minimum tier
-    if (tier < (this.config.minTier ?? 0)) {
-      return { valid: false, error: `Tier ${tier} below minimum ${this.config.minTier}` };
+    // Parse the proof from base64
+    const proofData = parseProofFromRequest(authData.proofB64);
+    if (!proofData) {
+      return { valid: false, errorCode: 'invalid_zk_proof', message: 'Invalid proof format' };
     }
 
     // Skip proof verification in development mode
     if (this.config.skipProofVerification) {
       console.log(`[ZkSession] Skipping proof verification (dev mode)`);
+      // In dev mode, extract tier and originToken from publicInputs (outputs are at indices 5,6)
+      // Layout: [service_id, current_time, origin_id, issuer_pubkey_x, issuer_pubkey_y, origin_token, tier]
+      const tier = proofData.publicInputs[6] ? Number(BigInt(proofData.publicInputs[6])) : 0;
+      const originToken = proofData.publicInputs[5] ?? '0x0';
       return { valid: true, tier, originToken };
     }
 
-    // Parse the proof from base64
-    const proofData = parseProofFromRequest(proofB64);
-    if (!proofData) {
-      return { valid: false, error: 'Invalid proof format' };
-    }
-
-    // Compute expected origin_id for this endpoint
+    // Step 5: Compute expected origin_id for this endpoint
     const originId = this.computeOriginId(req);
     const currentTime = BigInt(Math.floor(Date.now() / 1000));
 
@@ -212,30 +288,34 @@ export class ZkSessionMiddleware {
           if (drift <= maxDrift) {
             continue; // Accept with allowed time drift
           }
+          // Time check failure could indicate expired proof - check if too old
+          if (isPast && drift > 60n) {
+            return { valid: false, errorCode: 'proof_expired', message: 'Proof timestamp too old' };
+          }
         }
         return {
           valid: false,
-          error: `Public input mismatch at index ${i}`
+          errorCode: 'invalid_zk_proof',
+          message: `Public input mismatch at index ${i}`
         };
       }
     }
 
-    // Verify the ZK proof
+    // Step 6-7: Verify the ZK proof
     try {
       const result = await this.verifier.verify(proofData);
 
       if (!result.valid) {
-        return { valid: false, error: result.error ?? 'Proof verification failed' };
+        return { valid: false, errorCode: 'invalid_zk_proof', message: result.error ?? 'Proof verification failed' };
       }
 
-      // Verify the origin_token from proof matches the header
-      if (result.outputs?.originToken !== originToken) {
-        return { valid: false, error: 'Origin token mismatch' };
-      }
+      // Step 8: Extract outputs (origin_token, tier)
+      const originToken = result.outputs?.originToken ?? '';
+      const tier = result.outputs?.tier ?? 0;
 
-      // Verify the tier from proof matches the header
-      if (result.outputs?.tier !== tier) {
-        return { valid: false, error: 'Tier mismatch' };
+      // Step 10-11: Check minimum tier requirement
+      if (tier < (this.config.minTier ?? 0)) {
+        return { valid: false, errorCode: 'tier_insufficient', message: `Tier ${tier} below minimum ${this.config.minTier}` };
       }
 
       console.log(`[ZkSession] Proof verified for tier ${tier}, origin: ${originId.toString(16).slice(0, 16)}...`);
@@ -243,16 +323,23 @@ export class ZkSessionMiddleware {
       return { valid: true, tier, originToken };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { valid: false, error: `Proof verification failed: ${message}` };
+      return { valid: false, errorCode: 'invalid_zk_proof', message: `Proof verification failed: ${message}` };
     }
   }
 
   /**
-   * Compute origin_id for a request (hash of pathname)
+   * Compute origin_id for a request
+   * Recommended normalization: poseidon(METHOD, path_without_query, host)
+   * For simplicity in demo: hash of pathname only (strips query params)
    */
   private computeOriginId(req: Request): bigint {
     // Use originalUrl to get the full path (req.url is stripped in mounted routers)
-    const pathname = new URL(req.originalUrl, `http://${req.headers.host}`).pathname;
+    const url = new URL(req.originalUrl, `http://${req.headers.host}`);
+    // Normalize: strip query params, strip trailing slashes, lowercase
+    let pathname = url.pathname.toLowerCase();
+    if (pathname.endsWith('/') && pathname.length > 1) {
+      pathname = pathname.slice(0, -1);
+    }
     return stringToField(pathname);
   }
 

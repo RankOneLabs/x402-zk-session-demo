@@ -167,8 +167,9 @@ if (isMain) {
       },
       minTier: parseInt(process.env.MIN_TIER ?? '0'),
       skipProofVerification,
-      issuerUrl: process.env.ISSUER_URL ?? 'http://localhost:3001',
-      priceInfo: '1.00 USDC',
+      facilitatorUrl: process.env.FACILITATOR_URL ?? 'http://localhost:3001/settle',
+      paymentAmount: process.env.PAYMENT_AMOUNT ?? '100000',  // 0.10 USDC in 6 decimals
+      paymentAsset: process.env.PAYMENT_ASSET ?? 'USDC',
     },
   };
 

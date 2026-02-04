@@ -1,7 +1,8 @@
 /**
- * Issuer Express Server
+ * Facilitator Express Server
  * 
  * HTTP server that issues credentials via REST API.
+ * Compliant with x402 zk-session spec v0.1.0
  */
 
 import express, { type Request, type Response, type NextFunction } from 'express';
@@ -9,16 +10,20 @@ import cors from 'cors';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CredentialIssuer, type IssuerConfig } from './issuer.js';
-import type { IssuanceRequest } from './types.js';
+import type { IssuanceRequest, SettlementRequest } from './types.js';
+import { parseSchemePrefix, addSchemePrefix } from '@demo/crypto';
 
-export interface IssuerServerConfig extends IssuerConfig {
+export interface FacilitatorServerConfig extends IssuerConfig {
   port: number;
   corsOrigins?: string[];
 }
 
-export function createIssuerServer(config: IssuerServerConfig) {
+/** @deprecated Use FacilitatorServerConfig instead */
+export type IssuerServerConfig = FacilitatorServerConfig;
+
+export function createFacilitatorServer(config: FacilitatorServerConfig) {
   const app = express();
-  const issuer = new CredentialIssuer(config);
+  const facilitator = new CredentialIssuer(config);
 
   // Middleware
   app.use(cors({
@@ -28,28 +33,61 @@ export function createIssuerServer(config: IssuerServerConfig) {
 
   // Health check
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', service: 'zk-session-issuer' });
+    res.json({ status: 'ok', service: 'zk-session-facilitator' });
   });
 
-  // Get issuer info (public key, tiers)
+  // Get facilitator info (public key, tiers) - spec compliant format
   app.get('/info', async (_req, res) => {
-    const pubkey = await issuer.getPublicKey();
+    const pubkeyPrefixed = await facilitator.getPublicKeyPrefixed();
     res.json({
-      serviceId: config.serviceId.toString(),
-      issuerPubkey: {
-        x: '0x' + pubkey.x.toString(16),
-        y: '0x' + pubkey.y.toString(16),
-      },
+      service_id: config.serviceId.toString(),
+      facilitator_pubkey: pubkeyPrefixed,
+      schemes: ['pedersen-schnorr-bn254'],
       tiers: config.tiers.map(t => ({
         tier: t.tier,
-        priceUSDC: t.minAmountCents / 100,
-        maxPresentations: t.maxPresentations,
-        durationSeconds: t.durationSeconds,
+        price_usdc: t.minAmountCents / 100,
+        max_presentations: t.maxPresentations,
+        duration_seconds: t.durationSeconds,
       })),
     });
   });
 
-  // Issue credential
+  // Settlement endpoint (spec §7.2, §7.3)
+  app.post('/settle', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const request = req.body as SettlementRequest;
+
+      // Validate request structure
+      if (!request.zk_session?.commitment) {
+        res.status(400).json({ error: 'Missing zk_session.commitment' });
+        return;
+      }
+
+      if (!request.payment) {
+        res.status(400).json({ error: 'Missing payment' });
+        return;
+      }
+
+      // Validate scheme prefix
+      try {
+        const { scheme } = parseSchemePrefix(request.zk_session.commitment);
+        if (scheme !== 'pedersen-schnorr-bn254') {
+          res.status(400).json({ error: 'unsupported_zk_scheme', message: `Unsupported scheme: ${scheme}` });
+          return;
+        }
+      } catch {
+        res.status(400).json({ error: 'Invalid commitment format: expected scheme-prefixed string' });
+        return;
+      }
+
+      const response = await facilitator.settle(request);
+      res.json(response);
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Legacy endpoint (deprecated, for backward compatibility)
   app.post('/credentials/issue', async (req: Request, res: Response, next: NextFunction) => {
     try {
       const request = req.body as IssuanceRequest;
@@ -65,7 +103,7 @@ export function createIssuerServer(config: IssuerServerConfig) {
         return;
       }
 
-      const response = await issuer.issueCredential(request);
+      const response = await facilitator.issueCredential(request);
       res.json(response);
     } catch (error) {
       next(error);
@@ -74,7 +112,7 @@ export function createIssuerServer(config: IssuerServerConfig) {
 
   // Error handler
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error('[Issuer] Error:', err.message);
+    console.error('[Facilitator] Error:', err.message);
     res.status(500).json({ error: err.message });
   });
 
@@ -82,23 +120,26 @@ export function createIssuerServer(config: IssuerServerConfig) {
     app,
     start: () => {
       return new Promise<void>((resolve, reject) => {
-        issuer.initialize()
+        facilitator.initialize()
           .then(() => {
             app.listen(config.port, () => {
-              console.log(`[Issuer] Server running on port ${config.port}`);
-              console.log(`[Issuer] Service ID: ${config.serviceId}`);
-              console.log(`[Issuer] Mock payments: ${config.allowMockPayments ? 'enabled' : 'disabled'}`);
+              console.log(`[Facilitator] Server running on port ${config.port}`);
+              console.log(`[Facilitator] Service ID: ${config.serviceId}`);
+              console.log(`[Facilitator] Mock payments: ${config.allowMockPayments ? 'enabled' : 'disabled'}`);
               resolve();
             });
           })
           .catch((err: Error) => {
-            console.error('[Issuer] Failed to initialize:', err.message);
+            console.error('[Facilitator] Failed to initialize:', err.message);
             reject(err);
           });
       });
     },
   };
 }
+
+/** @deprecated Use createFacilitatorServer instead */
+export const createIssuerServer = createFacilitatorServer;
 
 // Run as standalone server
 const thisFile = fileURLToPath(import.meta.url);
@@ -111,7 +152,7 @@ if (isMain) {
   const rpcUrl = process.env.RPC_URL;
 
   // Default configuration for demo
-  const config: IssuerServerConfig = {
+  const config: FacilitatorServerConfig = {
     port: parseInt(process.env.PORT ?? '3001'),
     serviceId: BigInt(process.env.SERVICE_ID ?? '1'),
     secretKey: BigInt(process.env.ISSUER_SECRET_KEY ?? '0x1234567890abcdef'),
@@ -131,6 +172,6 @@ if (isMain) {
     }),
   };
 
-  const server = createIssuerServer(config);
+  const server = createFacilitatorServer(config);
   server.start();
 }

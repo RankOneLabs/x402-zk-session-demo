@@ -4,8 +4,8 @@ import { createPublicClient, createWalletClient, http, defineChain, parseEther, 
 import { privateKeyToAccount } from 'viem/accounts';
 import { createApiServer, ZkSessionMiddleware } from '@demo/api';
 import { ZkSessionClient } from '@demo/cli';
-import { createIssuerServer } from '@demo/issuer';
-import { hexToBigInt } from '@demo/crypto';
+import { createFacilitatorServer } from '@demo/facilitator';
+import { hexToBigInt, parseSchemePrefix, type X402Response } from '@demo/crypto';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -43,9 +43,10 @@ const walletClient = createWalletClient({ chain: anvilChain, transport: http(ANV
 describe('End-to-End Flow', () => {
     let anvilProcess: ChildProcess;
     let usdcAddress: `0x${string}`;
-    let issuerServer: ReturnType<typeof createIssuerServer>;
+    let facilitatorServer: ReturnType<typeof createFacilitatorServer>;
     let apiServer: ReturnType<typeof createApiServer>;
-    let issuerAddress: `0x${string}`;
+    let facilitatorAddress: `0x${string}`;
+    let facilitatorPubkey: { x: string; y: string };
 
     // Start Anvil
     beforeAll(async () => {
@@ -111,11 +112,11 @@ describe('End-to-End Flow', () => {
         expect(usdcAddress).toMatch(/^0x[a-fA-F0-9]{40}$/);
     }, 30000); // extensive timeout for compilation
 
-    it('should start Issuer and API servers', async () => {
-        // 1. Start Issuer
-        issuerAddress = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'; // Account 0 (Deployer/Receiver)
+    it('should start Facilitator and API servers', async () => {
+        // 1. Start Facilitator
+        facilitatorAddress = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'; // Account 0 (Deployer/Receiver)
 
-        issuerServer = createIssuerServer({
+        facilitatorServer = createFacilitatorServer({
             port: ISSUER_PORT,
             serviceId: 1001n,
             secretKey: 123456789n,
@@ -125,23 +126,31 @@ describe('End-to-End Flow', () => {
             paymentVerification: {
                 chainId: 31337,
                 rpcUrl: ANVIL_RPC,
-                recipientAddress: issuerAddress,
+                recipientAddress: facilitatorAddress,
                 usdcDecimals: 6,
                 usdcAddress, // PASS THE DEPLOYED ADDRESS
             },
             allowMockPayments: false,
         });
 
-        await issuerServer.start();
+        await facilitatorServer.start();
 
-        // Fetch issuer's public key from /info endpoint
+        // Fetch facilitator's public key from /info endpoint (new spec format)
         const infoResponse = await fetch(`http://localhost:${ISSUER_PORT}/info`);
-        const infoData = await infoResponse.json() as { issuerPubkey: { x: string, y: string } };
-        const issuerPubkey = {
-            x: hexToBigInt(infoData.issuerPubkey.x),
-            y: hexToBigInt(infoData.issuerPubkey.y),
+        const infoData = await infoResponse.json() as { 
+            facilitator_pubkey: string;
+            service_id: string;
+            schemes: string[];
         };
-        console.log('Issuer pubkey:', infoData.issuerPubkey);
+        
+        // Parse scheme-prefixed pubkey
+        const { value: pubkeyHex } = parseSchemePrefix(infoData.facilitator_pubkey);
+        const pubkeyBytes = pubkeyHex.startsWith('0x') ? pubkeyHex.slice(2) : pubkeyHex;
+        facilitatorPubkey = {
+            x: '0x' + pubkeyBytes.slice(2, 66),
+            y: '0x' + pubkeyBytes.slice(66, 130),
+        };
+        console.log('Facilitator pubkey:', facilitatorPubkey);
 
         // 2. Start API
         console.log('Starting API Server...');
@@ -149,11 +158,15 @@ describe('End-to-End Flow', () => {
             port: API_PORT,
             zkSession: {
                 serviceId: 1001n,
-                issuerPubkey, // Use real issuer public key
+                issuerPubkey: {
+                    x: hexToBigInt(facilitatorPubkey.x),
+                    y: hexToBigInt(facilitatorPubkey.y),
+                },
                 rateLimit: { maxRequestsPerToken: 10, windowSeconds: 60 },
                 skipProofVerification: SKIP_PROOF_VERIFICATION,
-                issuerUrl: `http://localhost:${ISSUER_PORT}`,
-                priceInfo: '1.00 USDC'
+                facilitatorUrl: `http://localhost:${ISSUER_PORT}/settle`,
+                paymentAmount: '100000',
+                paymentAsset: 'USDC',
             }
         });
 
@@ -161,23 +174,27 @@ describe('End-to-End Flow', () => {
         await apiServer.start();
     });
 
-    it('should execute full flow: Discovery -> Mint -> Pay -> Issue -> Verify', async () => {
+    it('should execute full flow: Discovery -> Mint -> Pay -> Settle -> Verify', async () => {
         // 0. Discovery Phase: Try to access protected resource unauthenticated
         console.log('Attempting unauthenticated access (Discovery)...');
         const discoveryResponse = await fetch(`http://localhost:${API_PORT}/api/whoami`);
         expect(discoveryResponse.status).toBe(402);
 
-        const discoveryData = await discoveryResponse.json();
-        console.log('Discovery Data:', discoveryData);
+        const discoveryData = await discoveryResponse.json() as X402Response;
+        console.log('Discovery Data (x402 format):', JSON.stringify(discoveryData, null, 2));
 
-        expect(discoveryData.error).toBe('Payment Required');
-        expect(discoveryData.discovery).toBeDefined();
-        expect(discoveryData.discovery.issuerUrl).toBe(`http://localhost:${ISSUER_PORT}`);
-        expect(discoveryData.discovery.price).toBe('1.00 USDC');
+        // Verify x402 response format (spec §6)
+        expect(discoveryData.x402).toBeDefined();
+        expect(discoveryData.x402.payment_requirements).toBeDefined();
+        expect(discoveryData.x402.payment_requirements.facilitator).toBe(`http://localhost:${ISSUER_PORT}/settle`);
+        expect(discoveryData.x402.payment_requirements.asset).toBe('USDC');
+        expect(discoveryData.x402.extensions.zk_session).toBeDefined();
+        expect(discoveryData.x402.extensions.zk_session.version).toBe('0.1');
+        expect(discoveryData.x402.extensions.zk_session.schemes).toContain('pedersen-schnorr-bn254');
 
-        // Parse price (simple logic for test)
-        // In reality client parses "1.00 USDC" -> 1_000_000 units
-        const requiredAmount = 1_000_000n; // 1 USDC
+        // Parse facilitator URL and pubkey from 402 response
+        const facilitatorUrl = discoveryData.x402.payment_requirements.facilitator;
+        const requiredAmount = BigInt(discoveryData.x402.payment_requirements.amount);
 
         // 1. Mint USDC to User
         // ABI for mint(address, uint256)
@@ -202,7 +219,7 @@ describe('End-to-End Flow', () => {
         });
         await walletClient.writeContract(mintRequest);
 
-        // 2. User transfers USDC to Issuer
+        // 2. User transfers USDC to Facilitator
         // ERC20 Transfer ABI
         const transferAbi = [{
             name: 'transfer',
@@ -212,13 +229,13 @@ describe('End-to-End Flow', () => {
             outputs: [{ name: '', type: 'bool' }]
         }];
 
-        console.log('Transferring USDC to issuer...');
+        console.log('Transferring USDC to facilitator...');
         // We need the hash for the proof
         const hash = await walletClient.writeContract({
             address: usdcAddress,
             abi: transferAbi,
             functionName: 'transfer',
-            args: [issuerAddress, requiredAmount], // Pay the discovered amount
+            args: [facilitatorAddress, requiredAmount], // Pay the discovered amount
             account: userAccount
         });
 
@@ -227,25 +244,31 @@ describe('End-to-End Flow', () => {
         // Wait for confirmation
         await publicClient.waitForTransactionReceipt({ hash });
 
-        // 3. Request Credential via Client (HTTP)
-        console.log('Requesting credential...');
+        // 3. Settle and obtain credential via Client (spec §7.2, §7.3)
+        console.log('Settling payment and obtaining credential...');
         const client = new ZkSessionClient({
-            issuerUrl: `http://localhost:${ISSUER_PORT}`, // Fix: Property 'issuerUrl' is missing in type
-            mockProofs: SKIP_PROOF_VERIFICATION
+            strategy: 'time-bucketed',
+            timeBucketSeconds: 60,
         });
 
-        const storedCredential = await client.obtainCredential(
-            `http://localhost:${ISSUER_PORT}`,
+        const storedCredential = await client.settleAndObtainCredential(
+            facilitatorUrl,
             { txHash: hash }
         );
 
         expect(storedCredential).toBeDefined();
         expect(storedCredential.tier).toBe(1);
+        console.log('Credential obtained:', {
+            serviceId: storedCredential.serviceId,
+            tier: storedCredential.tier,
+            maxPresentations: storedCredential.maxPresentations,
+        });
 
-        // 4. Access Protected API
-        console.log('Accessing protected API...');
+        // 4. Access Protected API with Authorization: ZKSession header
+        console.log('Accessing protected API with ZK proof...');
         const response = await client.makeAuthenticatedRequest(
-            `http://localhost:${API_PORT}/api/whoami`
+            `http://localhost:${API_PORT}/api/whoami`,
+            { issuerPubkey: facilitatorPubkey }
         );
 
         console.log('Response status:', response.status);

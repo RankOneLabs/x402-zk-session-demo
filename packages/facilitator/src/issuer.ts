@@ -1,7 +1,8 @@
 /**
- * Credential Issuer
+ * Credential Facilitator
  * 
  * Issues signed ZK session credentials after verifying x402 payment.
+ * Compliant with x402 zk-session spec v0.1.0
  */
 
 import {
@@ -10,9 +11,12 @@ import {
   poseidonHash7,
   bigIntToHex,
   hexToBigInt,
+  parseSchemePrefix,
+  addSchemePrefix,
   type Point,
+  type ZKSessionScheme,
 } from '@demo/crypto';
-import type { IssuanceRequest, IssuanceResponse, PaymentResult } from './types.js';
+import type { SettlementRequest, SettlementResponse, PaymentResult, IssuanceRequest, IssuanceResponse } from './types.js';
 import { PaymentVerifier, type PaymentVerificationConfig } from './payment-verifier.js';
 
 /** Configuration for a single tier */
@@ -94,7 +98,111 @@ export class CredentialIssuer {
   }
 
   /**
+   * Get the scheme-prefixed public key string for x402 responses
+   */
+  async getPublicKeyPrefixed(): Promise<string> {
+    const pubKey = await this.getPublicKey();
+    // Encode as uncompressed point: 04 + x + y (each 32 bytes, 64 hex chars)
+    const xHex = pubKey.x.toString(16).padStart(64, '0');
+    const yHex = pubKey.y.toString(16).padStart(64, '0');
+    return addSchemePrefix('pedersen-schnorr-bn254', `0x04${xHex}${yHex}`);
+  }
+
+  /**
+   * Settle payment and issue credential (spec §7.2, §7.3)
+   * This is the x402 spec-compliant endpoint.
+   */
+  async settle(request: SettlementRequest): Promise<SettlementResponse> {
+    await this.initialize();
+
+    // 1. Parse scheme-prefixed commitment
+    const { scheme, value: commitmentHex } = parseSchemePrefix(request.zk_session.commitment);
+    if (scheme !== 'pedersen-schnorr-bn254') {
+      throw new Error(`Unsupported scheme: ${scheme}`);
+    }
+
+    // Parse commitment point from hex (expects "0x04" + x (64 chars) + y (64 chars))
+    const commitmentBytes = commitmentHex.startsWith('0x') ? commitmentHex.slice(2) : commitmentHex;
+    if (!commitmentBytes.startsWith('04') || commitmentBytes.length !== 130) {
+      throw new Error('Invalid commitment format: expected uncompressed point (04 + 64 hex x + 64 hex y)');
+    }
+    const userCommitment: Point = {
+      x: hexToBigInt('0x' + commitmentBytes.slice(2, 66)),
+      y: hexToBigInt('0x' + commitmentBytes.slice(66, 130)),
+    };
+
+    // 2. Verify payment
+    const payment = await this.verifyPayment(request.payment);
+    if (!payment.valid) {
+      throw new Error('Invalid payment proof');
+    }
+
+    // 3. Determine tier from payment amount
+    const amountCents = Math.round(payment.amountUSDC * 100);
+    const tierConfig = this.tiers.find(t => amountCents >= t.minAmountCents);
+    if (!tierConfig) {
+      throw new Error(`Payment amount $${payment.amountUSDC} below minimum tier`);
+    }
+
+    // 4. Build credential
+    const now = Math.floor(Date.now() / 1000);
+    const expiresAt = now + tierConfig.durationSeconds;
+
+    // 5. Compute message hash for signature (spec §9)
+    // Signs: (service_id, tier, max_presentations, issued_at, expires_at, commitment_x, commitment_y)
+    const message = poseidonHash7(
+      this.config.serviceId,
+      BigInt(tierConfig.tier),
+      BigInt(tierConfig.maxPresentations),
+      BigInt(now),
+      BigInt(expiresAt),
+      userCommitment.x,
+      userCommitment.y,
+    );
+
+    // 6. Sign with Schnorr
+    const signature = await schnorrSign(this.config.secretKey, message);
+
+    // 7. Encode signature as hex string: r.x (64) + r.y (64) + s (64) = 192 hex chars
+    const sigHex = '0x' +
+      signature.r.x.toString(16).padStart(64, '0') +
+      signature.r.y.toString(16).padStart(64, '0') +
+      signature.s.toString(16).padStart(64, '0');
+
+    // 8. Encode commitment as hex (without scheme prefix, spec §7.3)
+    const commitmentOutHex = '0x04' +
+      userCommitment.x.toString(16).padStart(64, '0') +
+      userCommitment.y.toString(16).padStart(64, '0');
+
+    // 9. Return settlement response (spec §7.3)
+    // NOTE: Facilitator MUST NOT store or log commitment-to-payment mappings beyond operational needs
+    const response: SettlementResponse = {
+      payment_receipt: {
+        status: 'settled',
+        txHash: payment.txHash,
+        amountUSDC: payment.amountUSDC,
+      },
+      zk_session: {
+        credential: {
+          scheme: 'pedersen-schnorr-bn254',
+          service_id: bigIntToHex(this.config.serviceId),
+          tier: tierConfig.tier,
+          max_presentations: tierConfig.maxPresentations,
+          issued_at: now,
+          expires_at: expiresAt,
+          commitment: commitmentOutHex,
+          signature: sigHex,
+        },
+      },
+    };
+
+    console.log('[Facilitator] Issued credential for tier', tierConfig.tier);
+    return response;
+  }
+
+  /**
    * Issue a credential after verifying payment
+   * @deprecated Use settle() instead for spec-compliant API
    */
   async issueCredential(request: IssuanceRequest): Promise<IssuanceResponse> {
     // Ensure initialized (public key derived) to prevent race conditions
