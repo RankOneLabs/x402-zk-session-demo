@@ -369,7 +369,7 @@ export class ZkSessionClient {
     // This prevents a malicious facilitator from issuing credentials with wrong commitments
     const returnedCommitment = credential.commitment.toLowerCase();
     const expectedCommitment = commitmentHex.toLowerCase();
-    if (!returnedCommitment.endsWith(expectedCommitment)) {
+    if (returnedCommitment !== expectedCommitment) {
       throw new Error(
         'Commitment mismatch: facilitator returned credential with different commitment. ' +
         'This could indicate a malicious facilitator.'
