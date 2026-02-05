@@ -233,8 +233,9 @@ export class ZkSessionClient {
       expectedCommitment.point.x.toString(16).padStart(64, '0') +
       expectedCommitment.point.y.toString(16).padStart(64, '0');
     
+    const expectedCommitmentNormalized = expectedCommitmentHex.toLowerCase();
     const returnedCommitment = credential.commitment.toLowerCase();
-    if (!returnedCommitment.endsWith(expectedCommitmentHex.toLowerCase())) {
+    if (returnedCommitment !== expectedCommitmentNormalized) {
       throw new Error(
         'Commitment mismatch: facilitator returned credential with different commitment. ' +
         'This could indicate a malicious facilitator.'
