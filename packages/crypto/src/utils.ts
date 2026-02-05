@@ -52,12 +52,11 @@ export function randomFieldElement(): bigint {
 }
 
 /**
- * Convert a string to a field element
+ * Convert a string to a field element using SHA-256
  * 
- * NOTE: This is NOT a cryptographic hash. It treats the string as a base-256
- * number with modular reduction. Only use for non-security-critical purposes
- * like converting server-controlled identifiers (e.g., URL pathnames) to
- * field elements. Do not use for user-controlled input in security contexts.
+ * Uses cryptographic hashing (SHA-256) to map arbitrary strings to field elements.
+ * The hash output is interpreted as a big-endian integer and reduced modulo the
+ * BN254 scalar field order.
  */
 export function stringToField(str: string): bigint {
   const hash = createHash('sha256').update(str).digest();

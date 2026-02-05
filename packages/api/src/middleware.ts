@@ -174,12 +174,19 @@ export class ZkSessionMiddleware {
           const settleReq = {
             payment: payload.payment,
             paymentRequirements: {
-              amount: this.config.paymentAmount ?? '100000',
-              asset: this.config.paymentAsset ?? 'USDC',
+              scheme: 'exact',
               network: this.config.network ?? 'eip155:84532',
-              facilitator: this.config.facilitatorUrl,
+              asset: this.config.paymentAsset ?? 'USDC',
+              amount: this.config.paymentAmount ?? '100000',
+              payTo: this.config.paymentRecipient,
+              maxTimeoutSeconds: 300,
+              extra: {
+                // EIP-712 domain info for USDC (required by @x402/evm)
+                name: 'USD Coin',
+                version: '1',
+              },
             },
-            extensions: payload.extensions,
+            zk_session: payload.extensions?.zk_session ?? payload.zk_session,
           };
 
           const settleResp = await fetch(this.config.facilitatorUrl, {

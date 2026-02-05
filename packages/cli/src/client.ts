@@ -226,6 +226,21 @@ export class ZkSessionClient {
 
     const { credential } = response.extensions.zk_session;
 
+    // Verify the returned commitment matches what we sent
+    // Recompute commitment from secrets to verify
+    const expectedCommitment = await pedersenCommit(secrets.nullifierSeed, secrets.blindingFactor);
+    const expectedCommitmentHex = '0x04' +
+      expectedCommitment.point.x.toString(16).padStart(64, '0') +
+      expectedCommitment.point.y.toString(16).padStart(64, '0');
+    
+    const returnedCommitment = credential.commitment.toLowerCase();
+    if (!returnedCommitment.endsWith(expectedCommitmentHex.toLowerCase())) {
+      throw new Error(
+        'Commitment mismatch: facilitator returned credential with different commitment. ' +
+        'This could indicate a malicious facilitator.'
+      );
+    }
+
     // Parse credential wire format into stored format
     const stored = this.parseCredentialWireFormat(
       credential,
@@ -347,6 +362,17 @@ export class ZkSessionClient {
     const credential = data.zk_session?.credential;
     if (!credential) {
       throw new Error('Settlement response missing zk_session.credential');
+    }
+
+    // Verify the returned commitment matches what we sent
+    // This prevents a malicious facilitator from issuing credentials with wrong commitments
+    const returnedCommitment = credential.commitment.toLowerCase();
+    const expectedCommitment = commitmentHex.toLowerCase();
+    if (!returnedCommitment.endsWith(expectedCommitment)) {
+      throw new Error(
+        'Commitment mismatch: facilitator returned credential with different commitment. ' +
+        'This could indicate a malicious facilitator.'
+      );
     }
 
     // Parse and store credential

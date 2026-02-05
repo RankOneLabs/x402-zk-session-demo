@@ -84,7 +84,16 @@ export class CredentialIssuer {
    * Initialize the x402 EVM payment scheme
    */
   private initializeEvmScheme(evmConfig: EvmPaymentConfig): void {
+    // Import viem synchronously at module level would be better, but we use
+    // dynamic imports here for compatibility. Create clients once and reuse.
+    const { createPublicClient, createWalletClient, verifyTypedData } = require('viem');
+    
     const account = privateKeyToAccount(evmConfig.facilitatorPrivateKey);
+    const transport = http(evmConfig.rpcUrl);
+    
+    // Create clients once and reuse for all operations
+    const publicClient = createPublicClient({ transport });
+    const walletClient = createWalletClient({ account, transport });
     
     // Create a FacilitatorEvmSigner compatible with @x402/evm/exact/facilitator
     const signer: FacilitatorEvmSigner = {
@@ -92,62 +101,27 @@ export class CredentialIssuer {
       getAddresses: () => [account.address] as readonly `0x${string}`[],
       
       // Read contract state
-      readContract: async (args) => {
-        const { createPublicClient } = await import('viem');
-        const client = createPublicClient({
-          transport: http(evmConfig.rpcUrl),
-        });
-        return client.readContract(args as any);
-      },
+      readContract: (args) => publicClient.readContract(args as any),
       
       // Verify typed data signature (EIP-712)
-      verifyTypedData: async (args) => {
-        const { verifyTypedData } = await import('viem');
-        return verifyTypedData(args as any);
-      },
+      verifyTypedData: (args) => verifyTypedData(args as any),
       
       // Write contract - executes transferWithAuthorization
-      writeContract: async (args) => {
-        const { createWalletClient } = await import('viem');
-        const client = createWalletClient({
-          account,
-          transport: http(evmConfig.rpcUrl),
-        });
-        return client.writeContract(args as any);
-      },
+      writeContract: (args) => walletClient.writeContract(args as any),
       
       // Send raw transaction
-      sendTransaction: async (args) => {
-        const { createWalletClient } = await import('viem');
-        const client = createWalletClient({
-          account,
-          transport: http(evmConfig.rpcUrl),
-        });
-        return client.sendTransaction({
-          to: args.to,
-          data: args.data,
-          account,
-          chain: null,
-        });
-      },
+      sendTransaction: (args) => walletClient.sendTransaction({
+        to: args.to,
+        data: args.data,
+        account,
+        chain: null,
+      }),
       
       // Wait for transaction receipt
-      waitForTransactionReceipt: async (args) => {
-        const { createPublicClient } = await import('viem');
-        const client = createPublicClient({
-          transport: http(evmConfig.rpcUrl),
-        });
-        return client.waitForTransactionReceipt(args) as any;
-      },
+      waitForTransactionReceipt: (args) => publicClient.waitForTransactionReceipt(args) as any,
       
       // Get contract code
-      getCode: async (args) => {
-        const { createPublicClient } = await import('viem');
-        const client = createPublicClient({
-          transport: http(evmConfig.rpcUrl),
-        });
-        return client.getCode(args);
-      },
+      getCode: (args) => publicClient.getCode(args),
     };
     
     this.evmScheme = new ExactEvmScheme(signer);
