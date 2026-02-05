@@ -17,23 +17,23 @@ This demo implements a ZK credential system that replaces x402's SIWx identity l
 
 ```
 ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-│ FACILITATOR │      │   CLIENT    │      │   SERVER    │
-│  (Issuer)   │      │   (User)    │      │  (Origin)   │
+│ FACILITATOR │      │   SERVER    │      │   CLIENT    │
+│  (Issuer)   │      │  (Origin)   │      │   (User)    │
 └──────┬──────┘      └──────┬──────┘      └──────┬──────┘
        │                    │                    │
-       │                    │ 1. GET /resource   │
-       │                    ├───────────────────►│
-       │                    │ 2. 402 + zk_session│
-       │                    │◄───────────────────┤
-       │ 3. POST /settle    │                    │
-       │◄───────────────────┤                    │
-       │ 4. credential      │                    │
-       ├───────────────────►│                    │
-       │                    │ 5. Authorization:  │
-       │                    │    ZKSession proof │
-       │                    ├───────────────────►│
-       │                    │ 6. 200 OK          │
-       │                    │◄───────────────────┤
+       │                    │◄───────────────────┤ 1. GET /resource
+       │                    │───────────────────►│ 2. 402 + zk_session
+       │                    │                    │
+       │                    │◄───────────────────┤ 3. Sign EIP-3009
+       │◄───────────────────┤ (proxy settle)     │
+       │ 4. settle (tx)     │                    │
+       │ 5. credential      │                    │
+       │───────────────────►│                    │
+       │                    │───────────────────►│ 6. 200 OK + credential
+       │                    │                    │
+       │                    │◄───────────────────┤ 7. Authorization:
+       │                    │                    │    ZKSession proof
+       │                    │───────────────────►│ 8. 200 OK
 ```
 
 ## Project Structure
@@ -57,6 +57,26 @@ x402-zk-session-demo/
 └── scripts/            # Anvil fork setup, payment demo
 ```
 
+## Circuit Statistics (UltraHonk)
+
+This implementation uses the **BN254** curve with Noir's UltraHonk backend:
+
+| Metric | Value |
+|--------|-------|
+| ACIR opcodes | **97** |
+| Proof size | ~16 KB |
+| Proving time | ~400ms |
+| Verification | ~240ms |
+
+## Core Dependencies
+
+| Component | Library | Purpose |
+|-----------|---------|---------|
+| Payment | `@x402/core`, `@x402/evm` | Settlement & Verification |
+| ZK Proofs | `@noir-lang/macaron` | Circuit compilation & proving |
+| Elliptic Curve | `@noble/curves/bn254` | Schnorr signing & verification |
+| Commitments | `@aztec/bb.js` | Pedersen commitments |
+
 ## Quick Start
 
 ```bash
@@ -70,6 +90,10 @@ npm install
 
 # Build all packages
 npm run build
+
+# Configure environment
+cp .env.example .env
+# Edit .env and set your private keys/RPC URLs
 
 # Run crypto tests (49 tests)
 npm run test --workspace=@demo/crypto
@@ -155,18 +179,25 @@ Default: `time-bucketed` with 60-second windows (demo) / 5-minute (production).
 
 ## On-Chain Payment Verification
 
-To enable real USDC payment verification (Base Sepolia):
+To enable real USDC payment verification (Base Sepolia), configure the following in your `.env` file (see `.env.example`):
 
 ```bash
-# Set environment variables
-export RECIPIENT_ADDRESS=0xYourPaymentAddress
-export CHAIN_ID=84532
-export RPC_URL=https://sepolia.base.org
-export ALLOW_MOCK_PAYMENTS=false
+# Facilitator's private key for executing EIP-3009 transfers
+FACILITATOR_PRIVATE_KEY=0x...
 
-# Or use local Anvil fork
+# Chain configuration
+CHAIN_ID=84532
+RPC_URL=https://sepolia.base.org
+
+# Disable mock payments for production
+ALLOW_MOCK_PAYMENTS=false
+```
+
+For local development, you can use an Anvil fork:
+
+```bash
 ./scripts/start-anvil-fork.sh
-export RPC_URL=http://localhost:8545
+# Then set RPC_URL=http://localhost:8545 in your .env
 ```
 
 ## Dependencies
