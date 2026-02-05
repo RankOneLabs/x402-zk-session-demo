@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, ChildProcess } from 'child_process';
-import { createPublicClient, createWalletClient, http, defineChain, keccak256, encodePacked } from 'viem';
+import { createPublicClient, createWalletClient, http, defineChain } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { createApiServer, ZkSessionMiddleware } from '@demo/api';
 import { ZkSessionClient } from '@demo/cli';
 import { createFacilitatorServer } from '@demo/facilitator';
 import { hexToBigInt, parseSchemePrefix, type X402WithZKSessionResponse, type PaymentPayload, type PaymentRequirements } from '@demo/crypto';
+// Import x402 client libs for payment payload creation
+import { x402Client } from '@x402/core/client';
+import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -39,7 +42,6 @@ const anvilChain = defineChain({
 // Clients
 const userAccount = privateKeyToAccount(ANVIL_PK_1);
 const publicClient = createPublicClient({ chain: anvilChain, transport: http(ANVIL_RPC) });
-const walletClient = createWalletClient({ chain: anvilChain, transport: http(ANVIL_RPC), account: userAccount });
 
 describe('End-to-End Flow', () => {
     let anvilProcess: ChildProcess;
@@ -252,72 +254,10 @@ describe('End-to-End Flow', () => {
         await publicClient.waitForTransactionReceipt({ hash: mintTxHash });
         console.log('Minted USDC, tx:', mintTxHash.slice(0, 16) + '...');
 
-        // 2. Create EIP-3009 signed authorization (x402 v2 flow)
-        // User signs authorization for facilitator to pull funds
-        console.log('Creating EIP-3009 signed authorization...');
+        // 2. Create payment payload using x402 client library
+        // This handles EIP-3009 authorization and EIP-712 signing automatically
+        console.log('Creating payment payload via x402Client...');
         
-        const validAfter = 0n; // Valid immediately
-        const validBefore = BigInt(Math.floor(Date.now() / 1000) + 3600); // Valid for 1 hour
-        const nonce = keccak256(encodePacked(['address', 'uint256'], [userAccount.address, BigInt(Date.now())]));
-
-        // EIP-712 domain for USDC
-        const domain = {
-            name: 'USD Coin',
-            version: '1',
-            chainId: 31337,
-            verifyingContract: usdcAddress,
-        } as const;
-
-        // EIP-3009 TransferWithAuthorization type
-        const types = {
-            TransferWithAuthorization: [
-                { name: 'from', type: 'address' },
-                { name: 'to', type: 'address' },
-                { name: 'value', type: 'uint256' },
-                { name: 'validAfter', type: 'uint256' },
-                { name: 'validBefore', type: 'uint256' },
-                { name: 'nonce', type: 'bytes32' },
-            ],
-        } as const;
-
-        const message = {
-            from: userAccount.address,
-            to: facilitatorAddress,
-            value: requiredAmount,
-            validAfter,
-            validBefore,
-            nonce,
-        };
-
-        // Sign the authorization
-        const signature = await walletClient.signTypedData({
-            domain,
-            types,
-            primaryType: 'TransferWithAuthorization',
-            message,
-        });
-
-        console.log(`EIP-3009 Authorization signed: ${signature.slice(0, 20)}...`);
-
-        // 3. Build x402 v2 PaymentPayload
-        // @x402/evm exact scheme expects: payload.authorization + payload.signature
-        const paymentPayload: PaymentPayload = {
-            x402Version: 2,
-            resource: discoveryData.resource,
-            accepted: paymentReqs,
-            payload: {
-                authorization: {
-                    from: userAccount.address,
-                    to: facilitatorAddress,
-                    value: requiredAmount.toString(),
-                    validAfter: validAfter.toString(),
-                    validBefore: validBefore.toString(),
-                    nonce,
-                },
-                signature,
-            },
-        };
-
         // Build PaymentRequirements from the 402 response
         // @x402/evm requires extra.name and extra.version for EIP-712 domain
         const paymentRequirements: PaymentRequirements = {
@@ -334,6 +274,27 @@ describe('End-to-End Flow', () => {
                 version: '1',
             },
         };
+        
+        // Create x402 client with EVM exact scheme
+        // userAccount satisfies ClientEvmSigner interface (has address + signTypedData)
+        const x402 = new x402Client();
+        registerExactEvmScheme(x402, { signer: userAccount });
+        
+        // Create payment payload - handles EIP-3009/EIP-712 automatically
+        const { x402Version, payload } = await x402.createPaymentPayload({
+            x402Version: 2,
+            accepts: [paymentRequirements],
+            resource: discoveryData.resource,
+        });
+        
+        const paymentPayload: PaymentPayload = {
+            x402Version,
+            resource: discoveryData.resource,
+            accepted: paymentRequirements,
+            payload,
+        };
+
+        console.log('Payment payload created via x402Client');
 
         // 4. Settle and obtain credential via Client (spec §7.2, §7.3)
         console.log('Settling payment and obtaining credential...');
