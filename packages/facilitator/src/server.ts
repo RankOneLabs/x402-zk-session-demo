@@ -153,7 +153,7 @@ if (isMain) {
   const config: FacilitatorServerConfig = {
     port: parseInt(process.env.PORT ?? '3001'),
     serviceId: BigInt(process.env.SERVICE_ID ?? '1'),
-    secretKey: BigInt(process.env.ISSUER_SECRET_KEY ?? '0x1234567890abcdef'),
+    secretKey: BigInt(process.env.FACILITATOR_SECRET_KEY ?? '0x1234567890abcdef'),
     allowMockPayments: process.env.ALLOW_MOCK_PAYMENTS === 'true',
     tiers: [
       { minAmountCents: 1000, tier: 2, maxPresentations: 10000, durationSeconds: 30 * 24 * 60 * 60 }, // $10 = Enterprise

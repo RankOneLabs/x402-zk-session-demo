@@ -16,7 +16,7 @@ const __dirname = path.dirname(__filename);
 
 // --- Configuration ---
 const ANVIL_PORT = 8545;
-const ISSUER_PORT = 3001;
+const FACILITATOR_PORT = 3001;
 const API_PORT = 3002;
 const ANVIL_RPC = `http://127.0.0.1:${ANVIL_PORT}`;
 
@@ -138,7 +138,7 @@ describe('End-to-End Flow', () => {
         facilitatorAddress = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266'; // Account 0 (Deployer/Receiver)
 
         facilitatorServer = createFacilitatorServer({
-            port: ISSUER_PORT,
+            port: FACILITATOR_PORT,
             serviceId: 1001n,
             secretKey: 123456789n,
             tiers: [
@@ -157,7 +157,7 @@ describe('End-to-End Flow', () => {
         await facilitatorServer.start();
 
         // Fetch facilitator's public key from /info endpoint (new spec format)
-        const infoResponse = await fetch(`http://localhost:${ISSUER_PORT}/info`);
+        const infoResponse = await fetch(`http://localhost:${FACILITATOR_PORT}/info`);
         const infoData = await infoResponse.json() as { 
             facilitator_pubkey: string;
             service_id: string;
@@ -185,7 +185,7 @@ describe('End-to-End Flow', () => {
                 },
                 rateLimit: { maxRequestsPerToken: 10, windowSeconds: 60 },
                 skipProofVerification: SKIP_PROOF_VERIFICATION,
-                facilitatorUrl: `http://localhost:${ISSUER_PORT}/settle`,
+                facilitatorUrl: `http://localhost:${FACILITATOR_PORT}/settle`,
                 paymentAmount: '100000',
                 paymentAsset: usdcAddress, // Use deployed contract address
                 paymentRecipient: facilitatorAddress,
@@ -221,7 +221,7 @@ describe('End-to-End Flow', () => {
         // Parse facilitator URL and payment details from 402 response
         const zkSession = discoveryData.extensions!.zk_session!;
         const paymentReqs = discoveryData.accepts[0];
-        const facilitatorUrl = zkSession.facilitator_url || `http://localhost:${ISSUER_PORT}/settle`;
+        const facilitatorUrl = zkSession.facilitator_url || `http://localhost:${FACILITATOR_PORT}/settle`;
         const requiredAmount = BigInt(paymentReqs.amount);
 
         // 1. Mint USDC to User
