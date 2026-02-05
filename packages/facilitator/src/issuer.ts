@@ -155,7 +155,7 @@ export class CredentialIssuer {
   }
 
   /**
-   * Get the issuer's public key
+   * Get the facilitator's public key
    */
   async getPublicKey(): Promise<Point> {
     if (!this.publicKey) {
