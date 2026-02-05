@@ -259,8 +259,57 @@ export class ZkSessionMiddleware {
           return;
 
         } catch (error) {
-          console.error('[ZkSession] Payment processing failed:', error);
-          // Fall through to normal verification (which will likely return 402)
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          console.error('[ZkSession] Payment processing failed:', errorMessage);
+
+          // Distinguish between client errors and server errors
+          if (errorMessage.includes('JSON')) {
+            // Malformed payment signature (client error)
+            res.status(400).json({
+              error: 'INVALID_PAYMENT_SIGNATURE',
+              message: 'Malformed payment signature: unable to parse',
+            });
+            return;
+          }
+
+          if (errorMessage.includes('Facilitator error 4')) {
+            // 4xx from facilitator = client error (bad payment, invalid signature, etc.)
+            res.status(402).json({
+              error: 'PAYMENT_REJECTED',
+              message: `Payment rejected by facilitator: ${errorMessage}`,
+            });
+            return;
+          }
+
+          if (
+            errorMessage.includes('Facilitator error 5') ||
+            errorMessage.includes('fetch failed') ||
+            errorMessage.includes('ECONNREFUSED') ||
+            errorMessage.includes('ETIMEDOUT')
+          ) {
+            // 5xx from facilitator or network error = server error
+            res.status(503).json({
+              error: 'FACILITATOR_UNAVAILABLE',
+              message: 'Payment facilitator is temporarily unavailable. Please retry.',
+            });
+            return;
+          }
+
+          if (errorMessage.includes('Settlement response')) {
+            // Invalid response structure from facilitator
+            res.status(502).json({
+              error: 'FACILITATOR_ERROR',
+              message: 'Payment facilitator returned an invalid response',
+            });
+            return;
+          }
+
+          // Unknown error - return 500 to avoid silent failures
+          res.status(500).json({
+            error: 'PAYMENT_PROCESSING_ERROR',
+            message: 'An unexpected error occurred processing payment',
+          });
+          return;
         }
       }
 

@@ -22,8 +22,47 @@ import type { SettlementRequest, SettlementResponse } from './types.js';
 // Import from exact/facilitator for server-side verify/settle
 import { ExactEvmScheme } from '@x402/evm/exact/facilitator';
 import type { FacilitatorEvmSigner } from '@x402/evm';
-import { http } from 'viem';
+import {
+  http,
+  createPublicClient,
+  createWalletClient,
+  verifyTypedData,
+  defineChain,
+} from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
+import { baseSepolia } from 'viem/chains';
+
+// Local Anvil chain definition
+const anvil = defineChain({
+  id: 31337,
+  name: 'Anvil',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: {
+    default: { http: ['http://127.0.0.1:8545'] },
+  },
+  testnet: true,
+});
+
+/**
+ * Get the appropriate chain configuration based on chainId
+ */
+function getChain(chainId: number, rpcUrl: string) {
+  if (chainId === 84532) {
+    return baseSepolia;
+  } else if (chainId === 31337) {
+    return anvil;
+  } else {
+    // Create a custom chain definition for unknown chains
+    return defineChain({
+      id: chainId,
+      name: `Chain ${chainId}`,
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: {
+        default: { http: [rpcUrl] },
+      },
+    });
+  }
+}
 
 /** Configuration for a single tier */
 export interface TierConfig {
@@ -84,16 +123,13 @@ export class CredentialIssuer {
    * Initialize the x402 EVM payment scheme
    */
   private initializeEvmScheme(evmConfig: EvmPaymentConfig): void {
-    // Import viem synchronously at module level would be better, but we use
-    // dynamic imports here for compatibility. Create clients once and reuse.
-    const { createPublicClient, createWalletClient, verifyTypedData } = require('viem');
-    
     const account = privateKeyToAccount(evmConfig.facilitatorPrivateKey);
+    const chain = getChain(evmConfig.chainId, evmConfig.rpcUrl);
     const transport = http(evmConfig.rpcUrl);
     
     // Create clients once and reuse for all operations
-    const publicClient = createPublicClient({ transport });
-    const walletClient = createWalletClient({ account, transport });
+    const publicClient = createPublicClient({ chain, transport });
+    const walletClient = createWalletClient({ account, chain, transport });
     
     // Create a FacilitatorEvmSigner compatible with @x402/evm/exact/facilitator
     const signer: FacilitatorEvmSigner = {
