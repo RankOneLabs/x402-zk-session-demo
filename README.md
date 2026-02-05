@@ -2,6 +2,8 @@
 
 > ⚠️ **PROOF OF CONCEPT** - This is a demonstration project for educational and research purposes only. It is NOT production-ready and should NOT be used in any production environment. The cryptographic implementations have not been audited, and the security guarantees are not verified.
 
+**Compliant with [x402 zk-session spec v0.1.0](./zk-session-spec.md)**
+
 Anonymous session credentials for x402 APIs using zero-knowledge proofs.
 
 ## Overview
@@ -11,20 +13,26 @@ This demo implements a ZK credential system that replaces x402's SIWx identity l
 - **SIWx proves:** "I am wallet 0xABC" (linkable)
 - **ZK Session proves:** "I'm a member of the paid-users set" (unlinkable)
 
-## Architecture
+## Architecture (spec §4, §5)
 
 ```
 ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-│   ISSUER    │      │    USER     │      │   SERVER    │
-│  (Service)  │      │  (Client)   │      │  (Origin)   │
+│ FACILITATOR │      │   CLIENT    │      │   SERVER    │
+│  (Issuer)   │      │   (User)    │      │  (Origin)   │
 └──────┬──────┘      └──────┬──────┘      └──────┬──────┘
        │                    │                    │
-       │  ISSUANCE: x402 payment → credential   │
-       │◄───────────────────┤                    │
-       ├───────────────────►│                    │
-       │                    │                    │
-       │  PRESENTATION: ZK proof → access       │
+       │                    │ 1. GET /resource   │
        │                    ├───────────────────►│
+       │                    │ 2. 402 + zk_session│
+       │                    │◄───────────────────┤
+       │ 3. POST /settle    │                    │
+       │◄───────────────────┤                    │
+       │ 4. credential      │                    │
+       ├───────────────────►│                    │
+       │                    │ 5. Authorization:  │
+       │                    │    ZKSession proof │
+       │                    ├───────────────────►│
+       │                    │ 6. 200 OK          │
        │                    │◄───────────────────┤
 ```
 
@@ -42,7 +50,7 @@ x402-zk-session-demo/
 │   └── src/MockUSDC.sol
 ├── packages/
 │   ├── crypto/         # TypeScript crypto primitives (matches circuits)
-│   ├── issuer/         # Express issuer server (payment → credential)
+│   ├── facilitator/    # Express facilitator server (payment → credential)
 │   ├── api/            # Express API server with ZK verification
 │   ├── cli/            # CLI client with demo script
 │   └── e2e/            # End-to-end tests (Anvil + full flow)
@@ -66,8 +74,8 @@ npm run build
 # Run crypto tests (49 tests)
 npm run test --workspace=@demo/crypto
 
-# Start issuer server (terminal 1)
-npm run issuer
+# Start facilitator server (terminal 1)
+npm run facilitator
 
 # Start API server (terminal 2)
 npm run api
@@ -81,24 +89,48 @@ npm run demo --workspace=@demo/cli
 | Component | Status |
 |-----------|--------|
 | TypeScript crypto (Pedersen, Schnorr, Poseidon) | ✅ Working, 49 tests passing |
-| Issuer server (mock + on-chain payments) | ✅ Working |
+| Facilitator server (mock + on-chain payments) | ✅ Working |
 | API server (ZK proof verification) | ✅ Working |
 | CLI client with demo | ✅ Working |
 | Noir circuits | ✅ Working, 97 ACIR opcodes, ~400ms prove time |
 | On-chain payment verification | ✅ Working (E2E tested with Anvil) |
 | Full ZK proof generation/verification | ✅ Working, 16KB UltraHonk proofs |
 
-## Demo Flow
+## Demo Flow (spec §5.2)
 
 The demo runs with **real payments on local Anvil** (forked from Base Sepolia):
 
-1. Start Anvil fork: `./scripts/start-anvil-fork.sh`
-2. Client generates secrets locally (`nullifier_seed`, `blinding_factor`)
-3. Client computes Pedersen commitment (hides secrets from issuer)
-4. Client sends USDC payment + commitment to issuer
-5. Issuer verifies on-chain payment and returns signed credential
-6. Client makes authenticated API requests
-7. API server verifies proofs and applies rate limiting
+1. **Discovery:** Client requests protected resource → receives 402 with `x402.extensions.zk_session`
+2. **Settlement:** Client sends payment + commitment to `/settle` → receives credential
+3. **Presentation:** Client makes API requests with `Authorization: ZKSession` header
+4. **Verification:** Server verifies ZK proof and applies rate limiting
+
+### 402 Response Format (spec §6)
+
+```json
+{
+  "x402": {
+    "payment_requirements": {
+      "amount": "100000",
+      "asset": "USDC",
+      "facilitator": "http://localhost:3001/settle"
+    },
+    "extensions": {
+      "zk_session": {
+        "version": "0.1",
+        "schemes": ["pedersen-schnorr-bn254"],
+        "facilitator_pubkey": "pedersen-schnorr-bn254:0x04..."
+      }
+    }
+  }
+}
+```
+
+### Authorization Header (spec §8.1)
+
+```
+Authorization: ZKSession pedersen-schnorr-bn254:<base64-proof>
+```
 
 ## Privacy Budget
 

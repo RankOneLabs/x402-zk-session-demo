@@ -2,6 +2,8 @@
  * Utility functions for field element operations
  */
 
+import { createHash } from 'node:crypto';
+
 // BN254 scalar field modulus
 export const FIELD_MODULUS = 21888242871839275222246405745257275088548364400416034343698204186575808495617n;
 
@@ -50,21 +52,17 @@ export function randomFieldElement(): bigint {
 }
 
 /**
- * Convert a string to a field element
+ * Convert a string to a field element using SHA-256
  * 
- * NOTE: This is NOT a cryptographic hash. It treats the string as a base-256
- * number with modular reduction. Only use for non-security-critical purposes
- * like converting server-controlled identifiers (e.g., URL pathnames) to
- * field elements. Do not use for user-controlled input in security contexts.
+ * Uses cryptographic hashing (SHA-256) to map arbitrary strings to field elements.
+ * The hash output is interpreted as a big-endian integer and reduced modulo the
+ * BN254 scalar field order.
  */
 export function stringToField(str: string): bigint {
-  const encoder = new TextEncoder();
-  const bytes = encoder.encode(str);
-  let hash = 0n;
-  for (const byte of bytes) {
-    hash = (hash * 256n + BigInt(byte)) % FIELD_MODULUS;
-  }
-  return hash;
+  const hash = createHash('sha256').update(str).digest();
+  const hex = hash.toString('hex');
+  const val = BigInt('0x' + hex);
+  return val % FIELD_MODULUS;
 }
 
 /**

@@ -7,13 +7,16 @@ import { bigIntToHex, stringToField } from '@demo/crypto';
  * Create a mock Express request
  */
 function createMockRequest(headers: Record<string, string> = {}, url = '/api/test'): Partial<Request> {
+  const headersObj = {
+    host: 'localhost:3000',
+    ...headers,
+  };
   return {
-    headers: {
-      host: 'localhost:3000',
-      ...headers,
-    },
+    headers: headersObj,
     url,
     originalUrl: url, // Express sets originalUrl for route matching
+    protocol: 'http',
+    get: (name: string) => headersObj[name.toLowerCase() as keyof typeof headersObj],
   };
 }
 
@@ -55,6 +58,7 @@ function createMockResponse(): Partial<Response> & {
 
 /**
  * Create valid ZK session headers for testing
+ * Uses the new Authorization: ZKSession format (spec §8.1)
  */
 function createValidHeaders(
   originToken: string,
@@ -65,6 +69,7 @@ function createValidHeaders(
     originId?: bigint;
     issuerPubkeyX?: bigint;
     issuerPubkeyY?: bigint;
+    scheme?: string;
   } = {}
 ): Record<string, string> {
   const proofData = {
@@ -80,10 +85,11 @@ function createValidHeaders(
     ],
   };
 
+  const proofB64 = Buffer.from(JSON.stringify(proofData)).toString('base64');
+  const scheme = overrides.scheme ?? 'pedersen-schnorr-bn254';
+
   return {
-    'zk-session-proof': Buffer.from(JSON.stringify(proofData)).toString('base64'),
-    'zk-session-token': originToken,
-    'zk-session-tier': tier.toString(),
+    'authorization': `ZKSession ${scheme}:${proofB64}`,
   };
 }
 
@@ -97,6 +103,7 @@ describe('ZkSessionMiddleware', () => {
     },
     minTier: 0,
     skipProofVerification: true, // Skip actual ZK verification in unit tests
+    facilitatorUrl: 'http://localhost:3001/settle',
   };
 
   beforeEach(() => {
@@ -108,7 +115,7 @@ describe('ZkSessionMiddleware', () => {
   });
 
   describe('verifyRequest - header validation', () => {
-    it('should reject when all ZK headers are missing', async () => {
+    it('should reject when Authorization header is missing', async () => {
       const middleware = new ZkSessionMiddleware(defaultConfig);
       const req = createMockRequest({});
 
@@ -116,87 +123,82 @@ describe('ZkSessionMiddleware', () => {
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Missing ZK session headers');
+        expect(result.errorCode).toBe('invalid_zk_proof');
+        expect(result.message).toBe('Missing Authorization header');
       }
     });
 
-    it('should reject when proof header is missing', async () => {
+    it('should reject when Authorization header has wrong format', async () => {
       const middleware = new ZkSessionMiddleware(defaultConfig);
       const req = createMockRequest({
-        'zk-session-token': '0xabc',
-        'zk-session-tier': '1',
+        'authorization': 'Bearer sometoken',
       });
 
       const result = await middleware.verifyRequest(req as Request);
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Missing ZK session headers');
+        expect(result.errorCode).toBe('invalid_zk_proof');
+        expect(result.message).toBe('Missing Authorization header');
       }
     });
 
-    it('should reject when token header is missing', async () => {
+    it('should reject when Authorization header missing colon separator', async () => {
       const middleware = new ZkSessionMiddleware(defaultConfig);
       const req = createMockRequest({
-        'zk-session-proof': 'someproof',
-        'zk-session-tier': '1',
+        'authorization': 'ZKSession pedersen-schnorr-bn254',
       });
 
       const result = await middleware.verifyRequest(req as Request);
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Missing ZK session headers');
+        expect(result.errorCode).toBe('invalid_zk_proof');
+        expect(result.message).toBe('Missing Authorization header');
       }
     });
 
-    it('should reject when tier header is missing', async () => {
+    it('should reject unsupported scheme', async () => {
+      const middleware = new ZkSessionMiddleware(defaultConfig);
+      const headers = createValidHeaders('0xabc', 1, { scheme: 'unsupported-scheme' });
+      const req = createMockRequest(headers);
+
+      const result = await middleware.verifyRequest(req as Request);
+
+      expect(result.valid).toBe(false);
+      if (!result.valid) {
+        expect(result.errorCode).toBe('unsupported_zk_scheme');
+      }
+    });
+
+    it('should reject invalid proof format', async () => {
       const middleware = new ZkSessionMiddleware(defaultConfig);
       const req = createMockRequest({
-        'zk-session-proof': 'someproof',
-        'zk-session-token': '0xabc',
+        'authorization': 'ZKSession pedersen-schnorr-bn254:not-valid-base64!!!',
       });
 
       const result = await middleware.verifyRequest(req as Request);
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Missing ZK session headers');
+        expect(result.errorCode).toBe('invalid_zk_proof');
+        expect(result.message).toBe('Invalid proof format');
       }
     });
 
-    it('should reject when tier is not a number', async () => {
+    it('should reject invalid JSON in proof', async () => {
       const middleware = new ZkSessionMiddleware(defaultConfig);
+      const invalidProof = Buffer.from('not json').toString('base64');
       const req = createMockRequest({
-        'zk-session-proof': 'someproof',
-        'zk-session-token': '0xabc',
-        'zk-session-tier': 'not-a-number',
+        'authorization': `ZKSession pedersen-schnorr-bn254:${invalidProof}`,
       });
 
       const result = await middleware.verifyRequest(req as Request);
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Invalid tier');
-      }
-    });
-
-    it('should reject negative tier values', async () => {
-      const middleware = new ZkSessionMiddleware({
-        ...defaultConfig,
-        minTier: 0,
-      });
-      const req = createMockRequest({
-        'zk-session-proof': 'someproof',
-        'zk-session-token': '0xabc',
-        'zk-session-tier': '-1',
-      });
-
-      const result = await middleware.verifyRequest(req as Request);
-
-      expect(result.valid).toBe(false);
-      if (!result.valid) {
-        expect(result.error).toBe('Tier -1 below minimum 0');
+        expect(result.errorCode).toBe('invalid_zk_proof');
+        expect(result.message).toBe('Invalid proof format');
       }
     });
   });
@@ -214,7 +216,7 @@ describe('ZkSessionMiddleware', () => {
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Tier 1 below minimum 2');
+        expect(result.errorCode).toBe('tier_insufficient');
       }
     });
 
@@ -250,6 +252,7 @@ describe('ZkSessionMiddleware', () => {
         issuerPubkey: { x: 1n, y: 2n },
         rateLimit: { maxRequestsPerToken: 100, windowSeconds: 60 },
         skipProofVerification: true,
+        facilitatorUrl: 'http://localhost:3001/settle',
       });
       const headers = createValidHeaders('0xabc', 0);
       const req = createMockRequest(headers);
@@ -279,23 +282,21 @@ describe('ZkSessionMiddleware', () => {
     });
   });
 
-  describe('verifyRequest - proof format validation', () => {
+  describe('verifyRequest - proof format validation (with skipProofVerification: false)', () => {
     it('should reject invalid base64 proof', async () => {
       const middleware = new ZkSessionMiddleware({
         ...defaultConfig,
         skipProofVerification: false,
       });
       const req = createMockRequest({
-        'zk-session-proof': 'not-valid-base64!!!',
-        'zk-session-token': '0xabc',
-        'zk-session-tier': '1',
+        'authorization': 'ZKSession pedersen-schnorr-bn254:not-valid-base64!!!',
       });
 
       const result = await middleware.verifyRequest(req as Request);
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Invalid proof format');
+        expect(result.errorCode).toBe('invalid_zk_proof');
       }
     });
 
@@ -306,16 +307,14 @@ describe('ZkSessionMiddleware', () => {
       });
       const invalidProof = Buffer.from('not json').toString('base64');
       const req = createMockRequest({
-        'zk-session-proof': invalidProof,
-        'zk-session-token': '0xabc',
-        'zk-session-tier': '1',
+        'authorization': `ZKSession pedersen-schnorr-bn254:${invalidProof}`,
       });
 
       const result = await middleware.verifyRequest(req as Request);
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Invalid proof format');
+        expect(result.errorCode).toBe('invalid_zk_proof');
       }
     });
   });
@@ -334,7 +333,7 @@ describe('ZkSessionMiddleware', () => {
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Public input mismatch at index 0');
+        expect(result.errorCode).toBe('invalid_zk_proof');
       }
     });
 
@@ -352,7 +351,7 @@ describe('ZkSessionMiddleware', () => {
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Public input mismatch at index 2');
+        expect(result.errorCode).toBe('invalid_zk_proof');
       }
     });
 
@@ -376,7 +375,7 @@ describe('ZkSessionMiddleware', () => {
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Public input mismatch at index 3');
+        expect(result.errorCode).toBe('invalid_zk_proof');
       }
     });
 
@@ -400,7 +399,7 @@ describe('ZkSessionMiddleware', () => {
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Public input mismatch at index 4');
+        expect(result.errorCode).toBe('invalid_zk_proof');
       }
     });
   });
@@ -509,7 +508,7 @@ describe('ZkSessionMiddleware', () => {
       });
     });
 
-    it('should return 401 on invalid request', async () => {
+    it('should return 402 Payment Required on missing Authorization header', async () => {
       const middleware = new ZkSessionMiddleware(defaultConfig);
       const req = createMockRequest({}) as Request;
       const res = createMockResponse();
@@ -519,10 +518,9 @@ describe('ZkSessionMiddleware', () => {
 
       expect(next).not.toHaveBeenCalled();
       expect(res.statusCode).toBe(402); // x402: Payment Required
-      expect(res.jsonData).toMatchObject({ 
-        error: 'Payment Required',
-        message: 'This resource is protected. Please obtain a credential.',
-      });
+      // Check x402 PaymentRequired format
+      expect(res.jsonData).toHaveProperty('x402Version', 2);
+      expect(res.jsonData).toHaveProperty('accepts');
     });
 
     it('should set rate limit headers', async () => {
@@ -561,7 +559,7 @@ describe('ZkSessionMiddleware', () => {
       await middleware.middleware()(req, res3 as Response, next);
 
       expect(res3.statusCode).toBe(429);
-      expect(res3.jsonData).toEqual({ error: 'Rate limit exceeded' });
+      expect(res3.jsonData).toEqual({ error: 'rate_limited', message: 'Rate limit exceeded' });
       expect(next).not.toHaveBeenCalled();
     });
 
@@ -645,7 +643,7 @@ describe('ZkSessionMiddleware', () => {
 
       expect(result.valid).toBe(false);
       if (!result.valid) {
-        expect(result.error).toBe('Public input mismatch at index 2');
+        expect(result.errorCode).toBe('invalid_zk_proof');
       }
 
       await middleware.destroy();
@@ -674,7 +672,7 @@ describe('ZkSessionMiddleware', () => {
       expect(result.valid).toBe(false);
       if (!result.valid) {
         // Should fail on proof verification, not public input mismatch
-        expect(result.error).not.toContain('Public input mismatch');
+        expect(result.errorCode).toBe('invalid_zk_proof');
       }
 
       await middleware.destroy();

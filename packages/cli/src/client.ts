@@ -2,6 +2,7 @@
  * ZK Session Client
  * 
  * Manages credentials and generates authenticated requests.
+ * Compliant with x402 zk-session spec v0.1.0
  */
 
 import {
@@ -11,7 +12,36 @@ import {
   stringToField,
   bigIntToHex,
   hexToBigInt,
+  addSchemePrefix,
+  parseSchemePrefix,
+  type X402WithZKSessionResponse,
+  type X402PaymentRequest,
+  type X402PaymentResponse,
+  type CredentialWireFormat,
+  type PaymentPayload,
+  type PaymentRequirements,
 } from '@demo/crypto';
+
+/** Settlement request for x402 v2 */
+interface SettlementRequest {
+  payment: PaymentPayload;
+  paymentRequirements: PaymentRequirements;
+  zk_session: {
+    commitment: string;
+  };
+}
+
+/** Settlement response from facilitator */
+interface SettlementResponse {
+  payment_receipt: {
+    status: 'settled';
+    txHash?: string;
+    amountUSDC: number;
+  };
+  zk_session: {
+    credential: CredentialWireFormat;
+  };
+}
 import { Noir } from '@noir-lang/noir_js';
 import { UltraHonkBackend } from '@aztec/bb.js';
 import { CompiledCircuit } from '@noir-lang/types';
@@ -42,11 +72,23 @@ const DEFAULT_CONFIG: ClientConfig = {
   enableProofCache: true,
 };
 
+/** Parsed 402 response with zk_session extension */
+export interface Parsed402Response {
+  facilitatorUrl: string;
+  facilitatorPubkey: { x: string; y: string };
+  paymentAmount: string;
+  paymentAsset: string;
+  schemes: string[];
+}
+
 export class ZkSessionClient {
   private readonly config: ClientConfig;
   private readonly storage: CredentialStorage;
   private readonly proofCache: ProofCache;
   private readonly originIndices: Map<string, number> = new Map();
+
+  // Cache facilitator pubkey from 402 response
+  private facilitatorPubkeyCache: Map<string, { x: string; y: string }> = new Map();
 
   constructor(config: Partial<ClientConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -55,66 +97,319 @@ export class ZkSessionClient {
   }
 
   /**
-   * Obtain a credential from an issuer
+   * Parse a 402 Payment Required response (spec §6)
+   * Parses x402 PaymentRequired format with accepts[] array
    */
-  async obtainCredential(
-    issuerUrl: string,
-    paymentProof: {
-      mock?: { amountUSDC: number; payer: string };
-      txHash?: string;
+  parse402Response(body: X402WithZKSessionResponse): Parsed402Response {
+    // Validate zk_session extension exists
+    if (!body.extensions?.zk_session) {
+      throw new Error('Response does not contain zk_session extension');
     }
-  ): Promise<StoredCredential> {
-    // Generate secrets
+
+    const zkSession = body.extensions.zk_session;
+
+    // Get first payment option from accepts array
+    if (!body.accepts || body.accepts.length === 0) {
+      throw new Error('Response does not contain any payment options');
+    }
+    const payment = body.accepts[0];
+
+    // Parse scheme-prefixed facilitator pubkey
+    const { scheme, value: pubkeyHex } = parseSchemePrefix(zkSession.facilitator_pubkey);
+    if (scheme !== 'pedersen-schnorr-bn254') {
+      throw new Error(`Unsupported scheme: ${scheme}`);
+    }
+
+    // Parse pubkey from uncompressed point format (0x04 + x + y)
+    const pubkeyBytes = pubkeyHex.startsWith('0x') ? pubkeyHex.slice(2) : pubkeyHex;
+    if (!pubkeyBytes.startsWith('04') || pubkeyBytes.length !== 130) {
+      throw new Error('Invalid facilitator pubkey format');
+    }
+
+    const pubkeyX = '0x' + pubkeyBytes.slice(2, 66);
+    const pubkeyY = '0x' + pubkeyBytes.slice(66, 130);
+
+    // Get facilitator URL from extension (spec §6) or fall back to payTo
+    const facilitatorUrl = zkSession.facilitator_url || payment.payTo;
+
+    return {
+      facilitatorUrl,
+      facilitatorPubkey: { x: pubkeyX, y: pubkeyY },
+      paymentAmount: payment.amount,
+      paymentAsset: payment.asset,
+      schemes: zkSession.schemes,
+    };
+  }
+
+  /**
+   * Discover zk_session requirements by making a request to a protected endpoint
+   * and parsing the 402 response (spec §5.2, step 1-2)
+   */
+  async discover(url: string): Promise<Parsed402Response> {
+    const response = await fetch(url, { method: 'GET' });
+
+    if (response.status !== 402) {
+      throw new Error(`Expected 402 response, got ${response.status}`);
+    }
+
+    const body = await response.json() as X402WithZKSessionResponse;
+    const parsed = this.parse402Response(body);
+
+    // Cache the facilitator pubkey for later use
+    this.facilitatorPubkeyCache.set(parsed.facilitatorUrl, parsed.facilitatorPubkey);
+
+    return parsed;
+  }
+
+  /**
+   * Get cached facilitator pubkey
+   */
+  getCachedFacilitatorPubkey(facilitatorUrl: string): { x: string; y: string } | undefined {
+    return this.facilitatorPubkeyCache.get(facilitatorUrl);
+  }
+
+  /**
+   * Generate a payment request with ZK session commitment (spec §7.2)
+   * Client generates secrets locally and computes commitment
+   */
+  async generatePaymentRequest(
+    paymentProof: unknown
+  ): Promise<{
+    request: X402PaymentRequest;
+    secrets: {
+      nullifierSeed: bigint;
+      blindingFactor: bigint;
+    };
+  }> {
+    // Generate secrets locally (never sent to facilitator)
     const nullifierSeed = randomFieldElement();
     const blindingFactor = randomFieldElement();
 
     // Compute commitment (async - uses Barretenberg)
     const commitment = await pedersenCommit(nullifierSeed, blindingFactor);
 
-    // Request credential from issuer
-    const response = await fetch(`${issuerUrl}/credentials/issue`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        paymentProof,
-        userCommitment: {
-          x: bigIntToHex(commitment.point.x),
-          y: bigIntToHex(commitment.point.y),
-        },
-      }),
-    });
+    // Format commitment as scheme-prefixed string (spec §7.2)
+    // Format: "pedersen-schnorr-bn254:0x04" + x (64 hex) + y (64 hex)
+    const commitmentHex = '0x04' +
+      commitment.point.x.toString(16).padStart(64, '0') +
+      commitment.point.y.toString(16).padStart(64, '0');
+    const commitmentPrefixed = addSchemePrefix('pedersen-schnorr-bn254', commitmentHex);
 
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({ error: response.statusText })) as { error: string };
-      throw new Error(`Failed to obtain credential: ${error.error}`);
+    return {
+      request: {
+        x402Version: 2,
+        payment: paymentProof,
+        extensions: {
+          zk_session: {
+            commitment: commitmentPrefixed,
+          },
+        },
+      },
+      secrets: {
+        nullifierSeed,
+        blindingFactor,
+      },
+    };
+  }
+
+  /**
+   * Handle payment response and extract credential (spec §7.3)
+   */
+  async handlePaymentResponse(
+    response: X402PaymentResponse,
+    secrets: { nullifierSeed: bigint; blindingFactor: bigint },
+    facilitatorUrl: string
+  ): Promise<StoredCredential> {
+    if (!response.extensions?.zk_session?.credential) {
+      throw new Error('Payment response missing zk_session credential');
     }
 
-    const data = await response.json() as { credential: any };
-    const { credential } = data;
+    const { credential } = response.extensions.zk_session;
 
-    // Store with secrets
-    const stored: StoredCredential = {
-      ...credential,
-      nullifierSeed: bigIntToHex(nullifierSeed),
-      blindingFactor: bigIntToHex(blindingFactor),
-      presentationCount: 0,
-      obtainedAt: Date.now(),
-      issuerUrl,
-    };
+    // Verify the returned commitment matches what we sent
+    // Recompute commitment from secrets to verify
+    const expectedCommitment = await pedersenCommit(secrets.nullifierSeed, secrets.blindingFactor);
+    const expectedCommitmentHex = '0x04' +
+      expectedCommitment.point.x.toString(16).padStart(64, '0') +
+      expectedCommitment.point.y.toString(16).padStart(64, '0');
+    
+    const expectedCommitmentNormalized = expectedCommitmentHex.toLowerCase();
+    const returnedCommitment = credential.commitment.toLowerCase();
+    if (returnedCommitment !== expectedCommitmentNormalized) {
+      throw new Error(
+        'Commitment mismatch: facilitator returned credential with different commitment. ' +
+        'This could indicate a malicious facilitator.'
+      );
+    }
+
+    // Parse credential wire format into stored format
+    const stored = this.parseCredentialWireFormat(
+      credential,
+      secrets.nullifierSeed,
+      secrets.blindingFactor,
+      facilitatorUrl
+    );
 
     this.storage.set(stored);
+    console.log(`[Client] Credential obtained: tier=${credential.tier}, max_presentations=${credential.max_presentations}`);
+
     return stored;
   }
 
   /**
-   * Make an authenticated request
+   * Parse credential wire format from facilitator into stored format
+   */
+  private parseCredentialWireFormat(
+    wire: CredentialWireFormat,
+    nullifierSeed: bigint,
+    blindingFactor: bigint,
+    facilitatorUrl: string
+  ): StoredCredential {
+    // Parse commitment point from hex (0x04 + 64 hex x + 64 hex y)
+    const commitmentHex = wire.commitment.startsWith('0x') ? wire.commitment.slice(2) : wire.commitment;
+    if (!commitmentHex.startsWith('04') || commitmentHex.length !== 130) {
+      throw new Error('Invalid commitment format in credential');
+    }
+    const commitmentX = hexToBigInt('0x' + commitmentHex.slice(2, 66));
+    const commitmentY = hexToBigInt('0x' + commitmentHex.slice(66, 130));
+
+    // Parse signature (r.x + r.y + s, each 64 hex = 192 total)
+    const sigHex = wire.signature.startsWith('0x') ? wire.signature.slice(2) : wire.signature;
+    if (sigHex.length !== 192) {
+      throw new Error('Invalid signature format in credential');
+    }
+    const sigRX = '0x' + sigHex.slice(0, 64);
+    const sigRY = '0x' + sigHex.slice(64, 128);
+    const sigS = '0x' + sigHex.slice(128, 192);
+
+    return {
+      serviceId: wire.service_id,
+      tier: wire.tier,
+      maxPresentations: wire.max_presentations,
+      issuedAt: wire.issued_at,
+      expiresAt: wire.expires_at,
+      userCommitment: {
+        x: bigIntToHex(commitmentX),
+        y: bigIntToHex(commitmentY),
+      },
+      signature: {
+        r: { x: sigRX, y: sigRY },
+        s: sigS,
+      },
+      // Facilitator pubkey is obtained from 402 response, not stored here
+      // The client must get it from the 402 response each time
+      issuerPubkey: { x: '0x0', y: '0x0' }, // Placeholder - updated when making requests
+      nullifierSeed: bigIntToHex(nullifierSeed),
+      blindingFactor: bigIntToHex(blindingFactor),
+      presentationCount: 0,
+      obtainedAt: Date.now(),
+      issuerUrl: facilitatorUrl,
+    };
+  }
+
+  /**
+   * Settle payment and obtain credential using x402 v2 signed payload (spec §7.2, §7.3)
+   * 
+   * This method:
+   * 1. Generates secrets and commitment locally
+   * 2. Creates EIP-3009 signed payment authorization
+   * 3. Sends to facilitator for settlement
+   * 4. Stores and returns the credential
+   * 
+   * @param facilitatorUrl - URL of the facilitator's /settle endpoint
+   * @param paymentPayload - x402 v2 PaymentPayload with signed EIP-3009 authorization
+   * @param paymentRequirements - Payment requirements from the 402 response
+   */
+  async settleAndObtainCredential(
+    facilitatorUrl: string,
+    paymentPayload: PaymentPayload,
+    paymentRequirements: PaymentRequirements
+  ): Promise<StoredCredential> {
+    // Generate secrets locally (never sent to facilitator)
+    const nullifierSeed = randomFieldElement();
+    const blindingFactor = randomFieldElement();
+
+    // Compute commitment
+    const commitment = await pedersenCommit(nullifierSeed, blindingFactor);
+    const commitmentHex = '0x04' +
+      commitment.point.x.toString(16).padStart(64, '0') +
+      commitment.point.y.toString(16).padStart(64, '0');
+    const commitmentPrefixed = addSchemePrefix('pedersen-schnorr-bn254', commitmentHex);
+
+    // Build x402 v2 settlement request
+    const request: SettlementRequest = {
+      payment: paymentPayload,
+      paymentRequirements,
+      zk_session: {
+        commitment: commitmentPrefixed,
+      },
+    };
+
+    // Send to facilitator
+    const response = await fetch(facilitatorUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(request),
+    });
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
+      throw new Error(`Settlement failed: ${error.error || response.statusText}`);
+    }
+
+    const data = await response.json() as SettlementResponse;
+    
+    // Extract credential from response
+    const credential = data.zk_session?.credential;
+    if (!credential) {
+      throw new Error('Settlement response missing zk_session.credential');
+    }
+
+    // Verify the returned commitment matches what we sent
+    // This prevents a malicious facilitator from issuing credentials with wrong commitments
+    const returnedCommitment = credential.commitment.toLowerCase();
+    const expectedCommitment = commitmentHex.toLowerCase();
+    if (returnedCommitment !== expectedCommitment) {
+      throw new Error(
+        'Commitment mismatch: facilitator returned credential with different commitment. ' +
+        'This could indicate a malicious facilitator.'
+      );
+    }
+
+    // Parse and store credential
+    const stored = this.parseCredentialWireFormat(
+      credential,
+      nullifierSeed,
+      blindingFactor,
+      facilitatorUrl
+    );
+
+    this.storage.set(stored);
+    console.log(`[Client] Credential obtained: tier=${credential.tier}, max_presentations=${credential.max_presentations}`);
+
+    return stored;
+  }
+
+  /**
+   * Make an authenticated request using Authorization: ZKSession header (spec §8.1)
+   * 
+   * If the request receives a 402 response, this method will NOT automatically
+   * handle payment - the caller must obtain a credential first.
    */
   async makeAuthenticatedRequest(
     url: string,
-    options: RequestInit & { forceUnlinkable?: boolean } = {}
+    options: RequestInit & {
+      forceUnlinkable?: boolean;
+      issuerPubkey?: { x: string; y: string };  // Required for proof generation
+    } = {}
   ): Promise<Response> {
     const urlObj = new URL(url);
-    const originId = stringToField(urlObj.pathname);
+    // Normalize origin_id: lowercase, strip trailing slash, strip query params
+    let pathname = urlObj.pathname.toLowerCase();
+    if (pathname.endsWith('/') && pathname.length > 1) {
+      pathname = pathname.slice(0, -1);
+    }
+    const originId = stringToField(pathname);
 
     // Find credential for this service
     // For demo, use the first available credential
@@ -131,6 +426,22 @@ export class ZkSessionClient {
       throw new Error('Credential expired. Obtain a new one.');
     }
 
+    // Ensure we have issuer pubkey (either from stored credential or options)
+    const storedIssuerPubkey =
+      credential.issuerPubkey && credential.issuerPubkey.x !== '0x0'
+        ? credential.issuerPubkey
+        : undefined;
+
+    const issuerPubkey = options.issuerPubkey ?? storedIssuerPubkey;
+
+    if (!issuerPubkey) {
+      throw new Error(
+        'Issuer public key not available. Provide it via options.issuerPubkey'
+      );
+    }
+
+    // Persist the resolved issuer pubkey so future requests don't need options.issuerPubkey
+    credential.issuerPubkey = issuerPubkey;
     // Select presentation index based on strategy
     const { index, timeBucket } = this.selectPresentationIndex(
       credential,
@@ -169,11 +480,11 @@ export class ZkSessionClient {
       }
     }
 
-    // Add ZK session headers
+    // Format Authorization header (spec §8.1)
+    // Format: Authorization: ZKSession <scheme>:<base64-proof>
     const headers = new Headers(options.headers);
-    headers.set('ZK-SESSION-PROOF', proof.proof);
-    headers.set('ZK-SESSION-TOKEN', proof.originToken);
-    headers.set('ZK-SESSION-TIER', proof.tier.toString());
+    const authValue = `ZKSession pedersen-schnorr-bn254:${proof.proof}`;
+    headers.set('Authorization', authValue);
 
     return fetch(url, { ...options, headers });
   }
@@ -231,10 +542,6 @@ export class ZkSessionClient {
     };
 
     try {
-      console.log('[Client] Issuer Pubkey:', credential.issuerPubkey);
-      console.log('[Client] User Commitment:', credential.userCommitment);
-      console.log('[Client] Signature:', credential.signature);
-
       console.log('[Client] Generating witness with Noir...');
       const { witness } = await noir.execute(input);
 

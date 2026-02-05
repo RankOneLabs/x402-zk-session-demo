@@ -15,7 +15,7 @@
     "clean": "rm -rf packages/*/dist",
     "circuit:build": "cd circuits && nargo compile",
     "circuit:test": "cd circuits && nargo test",
-    "issuer": "npm run dev --workspace=@demo/issuer",
+    "facilitator": "npm run dev --workspace=@demo/facilitator",
     "api": "npm run dev --workspace=@demo/api",
     "demo": "npm run demo --workspace=@demo/cli"
   },
@@ -27,5 +27,9 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@x402/core": "^2.2.0",
+    "@x402/evm": "^2.2.0"
   }
 }
