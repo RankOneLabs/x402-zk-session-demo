@@ -1,34 +1,30 @@
 /**
  * Demo: Make a real USDC payment and obtain credential
  * 
- * This script demonstrates the full x402 payment flow:
- * 1. Transfer USDC to the issuer's payment address
- * 2. Submit the transaction hash to obtain a credential
+ * This script demonstrates the full x402 zk-session payment flow:
+ * 1. Discovery: Fetch 402 response with zk_session extension
+ * 2. Payment: Create EIP-3009 signed authorization via x402Client
+ * 3. Settlement: Submit payment to facilitator and obtain credential
+ * 4. Access: Make authenticated requests with ZK proofs
  * 
- * Run with: npx tsx scripts/demo-payment.ts
+ * Run with: npx tsx packages/cli/src/demo.ts
  */
 
-import {
-  parseSchemePrefix,
-} from '@demo/crypto';
+import { parseSchemePrefix, type PaymentRequirements, type PaymentPayload } from '@demo/crypto';
 import { privateKeyToAccount } from 'viem/accounts';
-import { TransferEvmScheme } from './schemes/TransferEvmScheme.js';
+import { x402Client } from '@x402/core/client';
+import { registerExactEvmScheme } from '@x402/evm/exact/client';
 import { ZkSessionClient } from './client.js';
 
 // Configuration
 const API_URL = process.env.API_URL ?? 'http://localhost:3002';
-const RPC_URL = process.env.RPC_URL ?? 'http://localhost:8545';
-const USE_REAL_PAYMENTS = process.env.USE_REAL_PAYMENTS !== 'false'; // Default to true
-
-// USDC on Base Sepolia (and Anvil fork)
-const USDC_ADDRESS = '0x036CbD53842c5426634e7929541eC2318f3dCF7e';
-
-// Anvil's first test account (User)
-const PRIVATE_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80';
+const PRIVATE_KEY = (process.env.PRIVATE_KEY ?? '0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d') as `0x${string}`;
 
 async function main() {
-  console.log('=== ZK Session Client Demo ===');
-  const client = new ZkSessionClient();
+  console.log('=== ZK Session Client Demo ===\n');
+  
+  const account = privateKeyToAccount(PRIVATE_KEY);
+  console.log(`Using account: ${account.address}\n`);
 
   // === PHASE 1: Discovery (spec §6) ===
   console.log('━━━ PHASE 1: Discovery (402 Response) ━━━\n');
@@ -38,180 +34,152 @@ async function main() {
 
   const discoveryResponse = await fetch(`${API_URL}/api/whoami`);
 
-  let payTo: string | undefined;
-  let paymentAmount: string | undefined;
-  let facilitatorUrl: string | undefined;
-  let facilitatorPubkeyString: string | undefined;
+  if (discoveryResponse.status === 200) {
+    console.log('✓ API returned 200 OK (Auth disabled?) - Demo complete.\n');
+    process.exit(0);
+  }
 
-  if (discoveryResponse.status === 402 && discoveryResponse.headers.get('content-type')?.includes('json')) {
-    const data = await discoveryResponse.json() as any;
-    console.log('✓ Received 402 response with zk_session extension:\n');
-    console.log('  accepts[0] (payment requirements):');
-    const note = data.accepts[0];
-    console.log(`    - amount: ${note.amount}`);
-    console.log(`    - asset: ${note.asset}`);
-    console.log(`    - facilitator: ${note.payTo}`);
-
-    payTo = note.payTo;
-    paymentAmount = note.amount;
-
-    console.log('  extensions.zk_session:');
-    const ext = data.extensions.zk_session;
-    console.log(`    - schemes: [${ext.schemes.join(', ')}]`);
-    console.log(`    - facilitator_pubkey: ${ext.facilitator_pubkey.slice(0, 20)}...`);
-
-    facilitatorUrl = ext.facilitator_url || payTo;
-    facilitatorPubkeyString = ext.facilitator_pubkey;
-    console.log();
-  } else {
-    // Demo success bypass if auth disabled
-    if (discoveryResponse.status === 200) {
-      console.log('✓ API returned 200 OK (Auth disabled?) - Demo complete.\n');
-      process.exit(0);
-    }
-    console.error('✗ Discovery failed: ' + discoveryResponse.status);
+  if (discoveryResponse.status !== 402) {
+    console.error(`✗ Expected 402, got ${discoveryResponse.status}`);
     console.log('\n   Make sure the API server is running:');
     console.log('   $ npm run api\n');
     process.exit(1);
   }
 
-  // === PHASE 2: Settlement (spec §5.2 steps 3-5) ===
-  console.log('━━━ PHASE 2: Settlement (via API Mediator) ━━━\n');
-
-  console.log(`Facilitator: ${facilitatorUrl}`);
-  console.log(`Payment: ${paymentAmount} USDC\n`);
-
-  console.log('1. Client generates secrets & commitment locally\n');
-
-  // 2. Generate payment request
-  let paymentProof: any = { mock: { amountUSDC: 1.00, payer: '0xdemouser' } };
-
-  if (USE_REAL_PAYMENTS && payTo && paymentAmount) {
-    try {
-      console.log('   (Using Real Payments on Anvil via TransferEvmScheme)');
-
-      const account = privateKeyToAccount(PRIVATE_KEY);
-      const scheme = new TransferEvmScheme(account, RPC_URL, USDC_ADDRESS as `0x${string}`);
-
-      const payload = await scheme.createPaymentPayload(2, {
-        amount: paymentAmount,
-        asset: 'USDC',
-        payTo: payTo,
-        scheme: 'exact',
-        network: 'eip155:84532',
-        maxTimeoutSeconds: 300,
-        extra: {}
-      });
-
-      paymentProof = payload.payload; // { txHash: ... }
-      console.log(`   Payment Proof generated:`, paymentProof);
-
-    } catch (e) {
-      console.warn('   ! Real payment failed:', (e as Error).message);
-      console.warn('   Falling back to mock payment.');
-    }
-  }
-
-  const { request, secrets } = await client.generatePaymentRequest(paymentProof);
-
-  console.log('2. Client sends PAYMENT-SIGNATURE to API Server');
-  console.log(`   - commitment: ${request.extensions.zk_session.commitment}\n`);
-
-  console.log('3. API Server proxies to/from Facilitator...');
-
-  let credential;
-  try {
-    const paymentSigJson = JSON.stringify(request);
-    const paymentSigB64 = Buffer.from(paymentSigJson).toString('base64');
-
-    const paymentResponse = await fetch(`${API_URL}/api/whoami`, {
-      method: 'GET',
-      headers: {
-        'PAYMENT-SIGNATURE': paymentSigB64,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (paymentResponse.status !== 200) {
-      throw new Error(`Payment failed: ${paymentResponse.status} ${paymentResponse.statusText}`);
-    }
-
-    const paymentResponseHeader = paymentResponse.headers.get('PAYMENT-RESPONSE');
-    if (!paymentResponseHeader) {
-      throw new Error('Missing PAYMENT-RESPONSE header from API');
-    }
-
-    const paymentResponsePayload = JSON.parse(Buffer.from(paymentResponseHeader, 'base64').toString('utf-8'));
-
-    console.log('\n✓ Payment accepted by API Server\n');
-
-    if (!facilitatorUrl) facilitatorUrl = 'http://localhost:3001/settle'; // Final fallback
-
-    // 5. Handle response and store credential
-    credential = await client.handlePaymentResponse(
-      paymentResponsePayload,
-      secrets,
-      facilitatorUrl
-    );
-
-    console.log('\n✓ Settlement complete!\n');
-    console.log('   Credential (CredentialWireFormat):');
-    console.log(`   - scheme: pedersen-schnorr-bn254`);
-    console.log(`   - service_id: ${credential.serviceId.slice(0, 20)}...`);
-    console.log(`   - tier: ${credential.tier} (Pro)`);
-    console.log(`   - max_presentations: ${credential.maxPresentations}`);
-    console.log(`   - expires_at: ${new Date(credential.expiresAt * 1000).toLocaleString()}\n`);
-
-  } catch (err) {
-    console.error('\n✗ Settlement failed:', (err as Error).message);
+  const discoveryData = await discoveryResponse.json() as any;
+  
+  if (!discoveryData.extensions?.zk_session) {
+    console.error('✗ Missing zk_session extension in 402 response');
     process.exit(1);
   }
 
+  const paymentReqs = discoveryData.accepts[0];
+  const zkSession = discoveryData.extensions.zk_session;
+  const facilitatorUrl = zkSession.facilitator_url;
+  const facilitatorPubkeyString = zkSession.facilitator_pubkey;
+
+  console.log('✓ Received 402 response:\n');
+  console.log('  Payment Requirements:');
+  console.log(`    - scheme: ${paymentReqs.scheme}`);
+  console.log(`    - network: ${paymentReqs.network}`);
+  console.log(`    - amount: ${paymentReqs.amount}`);
+  console.log(`    - asset: ${paymentReqs.asset}`);
+  console.log(`    - payTo: ${paymentReqs.payTo}`);
+  console.log('  ZK Session Extension:');
+  console.log(`    - schemes: [${zkSession.schemes.join(', ')}]`);
+  console.log(`    - facilitator_pubkey: ${facilitatorPubkeyString.slice(0, 40)}...`);
+  console.log(`    - facilitator_url: ${facilitatorUrl}\n`);
+
+  // === PHASE 2: Payment & Settlement (spec §7) ===
+  console.log('━━━ PHASE 2: Payment & Settlement ━━━\n');
+
+  // Build PaymentRequirements with EIP-712 domain info
+  const paymentRequirements: PaymentRequirements = {
+    scheme: paymentReqs.scheme,
+    network: paymentReqs.network,
+    asset: paymentReqs.asset,
+    amount: paymentReqs.amount,
+    payTo: paymentReqs.payTo,
+    maxTimeoutSeconds: paymentReqs.maxTimeoutSeconds,
+    extra: {
+      ...paymentReqs.extra,
+      // EIP-712 domain info for USDC (required by @x402/evm)
+      name: 'USD Coin',
+      version: '1',
+    },
+  };
+
+  console.log('1. Creating payment payload via x402Client...');
+  
+  // Create x402 client with EVM exact scheme
+  const x402 = new x402Client();
+  registerExactEvmScheme(x402, { signer: account });
+
+  // Create payment payload - handles EIP-3009/EIP-712 automatically
+  const { x402Version, payload } = await x402.createPaymentPayload({
+    x402Version: 2,
+    accepts: [paymentRequirements],
+    resource: discoveryData.resource,
+  });
+
+  const paymentPayload: PaymentPayload = {
+    x402Version,
+    resource: discoveryData.resource,
+    accepted: paymentRequirements,
+    payload,
+  };
+
+  console.log('   ✓ EIP-3009 authorization signed\n');
+
+  console.log('2. Settling payment and obtaining credential...');
+
+  const client = new ZkSessionClient({
+    strategy: 'time-bucketed',
+    timeBucketSeconds: 60,
+  });
+
+  const credential = await client.settleAndObtainCredential(
+    facilitatorUrl,
+    paymentPayload,
+    paymentRequirements
+  );
+
+  console.log('\n✓ Settlement complete!\n');
+  console.log('   Credential:');
+  console.log(`   - service_id: ${credential.serviceId.slice(0, 20)}...`);
+  console.log(`   - tier: ${credential.tier}`);
+  console.log(`   - max_presentations: ${credential.maxPresentations}`);
+  console.log(`   - expires_at: ${new Date(credential.expiresAt * 1000).toLocaleString()}\n`);
+
+  // === PHASE 3: Anonymous API Access ===
   console.log('━━━ PHASE 3: Anonymous API Access ━━━\n');
 
-  console.log(`API Server: ${API_URL}`);
-  console.log('Making 3 requests to /api/chat...\n');
+  // Parse facilitator pubkey
+  const parsedPubkey = parseSchemePrefix(facilitatorPubkeyString).value;
+  const issuerPubkey = {
+    x: '0x' + parsedPubkey.slice(4, 68),
+    y: '0x' + parsedPubkey.slice(68, 132),
+  };
 
+  console.log('Making authenticated requests with ZK proofs...\n');
+
+  // Test /api/whoami
+  console.log('1. GET /api/whoami');
+  const whoamiResp = await client.makeAuthenticatedRequest(`${API_URL}/api/whoami`, {
+    issuerPubkey,
+  });
+  const whoamiData = await whoamiResp.json() as any;
+  console.log(`   Status: ${whoamiResp.status}`);
+  console.log(`   Response: ${JSON.stringify(whoamiData)}\n`);
+
+  // Test /api/chat
   const messages = ['Hello!', 'How does this work?', 'Is this really anonymous?'];
-
-  // Parse pubkey for Phase 3
-  let issuerPubkey = undefined;
-  if (facilitatorPubkeyString) {
-    const parsedPubkey = parseSchemePrefix(facilitatorPubkeyString).value; // "0x04..."
-    const x = parsedPubkey.slice(4, 68); // 32 bytes = 64 hex chars
-    const y = parsedPubkey.slice(68, 132);
-    issuerPubkey = {
-      x: "0x" + x,
-      y: "0x" + y
-    };
-  }
-
+  
   for (const [i, msg] of messages.entries()) {
-    console.log(`${i + 1}. POST /api/chat { message: "${msg}" }`);
+    console.log(`${i + 2}. POST /api/chat { message: "${msg}" }`);
 
-    try {
-      const response = await client.makeAuthenticatedRequest(`${API_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg }),
-        issuerPubkey
-      });
+    const response = await client.makeAuthenticatedRequest(`${API_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: msg }),
+      issuerPubkey,
+    });
 
-      const body = await response.json() as any;
+    const body = await response.json() as any;
 
-      if (response.ok) {
-        console.log(`   Status: 200 OK`);
-        console.log(`   Response: "${body.response}"`);
-        console.log(`   Rate Limit: ${response.headers.get('x-ratelimit-remaining')} remaining`);
-      } else {
-        console.log(`   Status: ${response.status} ${response.statusText}`);
-        console.log(`   Error: ${body.error}`);
-      }
-    } catch (err) {
-      console.error(`   Failed: ${(err as Error).message}`);
+    if (response.ok) {
+      console.log(`   Status: 200 OK`);
+      console.log(`   Response: "${body.response}"`);
+      const remaining = response.headers.get('x-ratelimit-remaining');
+      if (remaining) console.log(`   Rate Limit: ${remaining} remaining`);
+    } else {
+      console.log(`   Status: ${response.status}`);
+      console.log(`   Error: ${body.error}`);
     }
     console.log();
   }
+
+  console.log('✓ Demo complete!\n');
 }
 
 main().catch((err: Error) => {

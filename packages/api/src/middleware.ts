@@ -193,30 +193,57 @@ export class ZkSessionMiddleware {
             throw new Error(`Facilitator error ${settleResp.status}: ${errBody}`);
           }
 
-          const settleData = await settleResp.json() as any;
+          const settleData: unknown = await settleResp.json();
 
-          if (!settleData.success) {
-            throw new Error('Settlement failed (success=false)');
+          // Validate settlement response structure (SettlementResponse from facilitator/types.ts)
+          if (!settleData || typeof settleData !== 'object') {
+            throw new Error('Settlement response is not an object');
+          }
+
+          const response = settleData as Record<string, unknown>;
+
+          // Validate payment_receipt
+          if (!response.payment_receipt || typeof response.payment_receipt !== 'object') {
+            throw new Error('Settlement response missing payment_receipt');
+          }
+          const receipt = response.payment_receipt as Record<string, unknown>;
+          if (receipt.status !== 'settled') {
+            throw new Error(`Settlement failed: status=${receipt.status}`);
+          }
+
+          // Validate zk_session.credential
+          if (!response.zk_session || typeof response.zk_session !== 'object') {
+            throw new Error('Settlement response missing zk_session');
+          }
+          const zkSession = response.zk_session as Record<string, unknown>;
+          if (!zkSession.credential || typeof zkSession.credential !== 'object') {
+            throw new Error('Settlement response missing zk_session.credential');
+          }
+          const cred = zkSession.credential as Record<string, unknown>;
+
+          // Validate required credential fields
+          if (typeof cred.tier !== 'number') {
+            throw new Error('Settlement response credential missing tier');
           }
 
           // Construct X402PaymentResponse
           const clientResp = {
             x402Version: 2,
             payment_receipt: {
-              success: true,
-              transaction: settleData.transaction,
-              network: settleData.network,
-              payer: settleData.payer,
+              status: 'settled',
+              txHash: receipt.txHash,
+              amountUSDC: receipt.amountUSDC,
             },
-            extensions: settleData.extensions,
+            zk_session: {
+              credential: cred,
+            },
           };
 
           res.set('PAYMENT-RESPONSE', Buffer.from(JSON.stringify(clientResp)).toString('base64'));
 
           // Grant access for this request
-          const cred = settleData.extensions.zk_session.credential;
           req.zkSession = {
-            tier: cred.tier,
+            tier: cred.tier as number,
             originToken: 'payment-session', // Placeholder for payment-based session
           };
 
