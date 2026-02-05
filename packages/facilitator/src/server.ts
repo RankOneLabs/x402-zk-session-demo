@@ -18,9 +18,6 @@ export interface FacilitatorServerConfig extends IssuerConfig {
   corsOrigins?: string[];
 }
 
-/** @deprecated Use FacilitatorServerConfig instead */
-export type IssuerServerConfig = FacilitatorServerConfig;
-
 export function createFacilitatorServer(config: FacilitatorServerConfig) {
   const app = express();
   const facilitator = new CredentialIssuer(config);
@@ -135,9 +132,6 @@ export function createFacilitatorServer(config: FacilitatorServerConfig) {
     },
   };
 }
-
-/** @deprecated Use createFacilitatorServer instead */
-export const createIssuerServer = createFacilitatorServer;
 
 // Run as standalone server
 const thisFile = fileURLToPath(import.meta.url);
