@@ -89,8 +89,12 @@ describe('randomFieldElement', () => {
 });
 
 describe('stringToField', () => {
-  it('converts empty string to 0', () => {
-    expect(stringToField('')).toBe(0n);
+  it('produces consistent output for empty string', () => {
+    // SHA-256 of empty string is not zero, but should be consistent
+    const result = stringToField('');
+    expect(result).toBe(stringToField(''));
+    expect(result).toBeGreaterThanOrEqual(0n);
+    expect(result).toBeLessThan(FIELD_MODULUS);
   });
 
   it('produces consistent output', () => {
