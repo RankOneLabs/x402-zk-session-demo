@@ -129,7 +129,7 @@ export class CredentialIssuer {
   }
 
   /**
-   * Initialize the issuer (derive public key)
+   * Initialize the facilitator (derive public key)
    */
   async initialize(): Promise<void> {
     // Return existing promise if initialization is in progress
