@@ -169,6 +169,25 @@ export class ZkSessionMiddleware {
           const payloadStr = Buffer.from(paymentSig, 'base64').toString('utf-8');
           const payload = JSON.parse(payloadStr);
 
+          // Security: Only accept canonical extensions.zk_session path (spec §7.2)
+          // Reject if zk_session is in non-canonical location or ambiguous
+          if (payload.zk_session) {
+            res.status(400).json({
+              error: 'INVALID_PAYMENT_SIGNATURE',
+              message: 'Invalid zk_session location: must be in payload.extensions.zk_session per spec §7.2',
+            });
+            return;
+          }
+
+          // Require canonical extensions.zk_session
+          if (!payload.extensions?.zk_session) {
+            res.status(400).json({
+              error: 'INVALID_PAYMENT_SIGNATURE',
+              message: 'Missing zk_session in payload.extensions',
+            });
+            return;
+          }
+
           // Call Facilitator /settle
           // Map client's X402PaymentRequest to Facilitator's SettlementRequest
           const settleReq = {
@@ -186,7 +205,7 @@ export class ZkSessionMiddleware {
                 version: '1',
               },
             },
-            zk_session: payload.extensions?.zk_session ?? payload.zk_session,
+            zk_session: payload.extensions.zk_session,
           };
 
           const settleResp = await fetch(this.config.facilitatorUrl, {
