@@ -17,26 +17,23 @@ This demo implements a ZK credential system that replaces x402's SIWx identity l
 
 ```
 ┌─────────────┐      ┌─────────────┐      ┌─────────────┐
-│ FACILITATOR │      │   CLIENT    │      │   SERVER    │
-│  (Issuer)   │      │   (User)    │      │  (Origin)   │
+│ FACILITATOR │      │   SERVER    │      │   CLIENT    │
+│  (Issuer)   │      │  (Origin)   │      │   (User)    │
 └──────┬──────┘      └──────┬──────┘      └──────┬──────┘
        │                    │                    │
-       │                    │ 1. GET /resource   │
-       │                    ├───────────────────►│
-       │                    │ 2. 402 + zk_session│
-       │                    │◄───────────────────┤
+       │                    │◄───────────────────┤ 1. GET /resource
+       │                    │───────────────────►│ 2. 402 + zk_session
        │                    │                    │
-       │ 4. settle (tx)     │ 3. Sign EIP-3009   │
-       │◄───────────────────┤                    │
-       │                    │                    │
+       │                    │◄───────────────────┤ 3. Sign EIP-3009
+       │◄───────────────────┤ (proxy settle)     │
+       │ 4. settle (tx)     │                    │
        │ 5. credential      │                    │
-       │◄───────────────────┤                    │
+       │───────────────────►│                    │
+       │                    │───────────────────►│ 6. 200 OK + credential
        │                    │                    │
-       │                    │ 6. Authorization:  │
-       │                    │    ZKSession proof │
-       │                    ├───────────────────►│
-       │                    │ 7. 200 OK          │
-       │                    │◄───────────────────┤
+       │                    │◄───────────────────┤ 7. Authorization:
+       │                    │                    │    ZKSession proof
+       │                    │───────────────────►│ 8. 200 OK
 ```
 
 ## Project Structure
@@ -59,6 +56,26 @@ x402-zk-session-demo/
 │   └── e2e/            # End-to-end tests (Anvil + full flow)
 └── scripts/            # Anvil fork setup, payment demo
 ```
+
+## Circuit Statistics (UltraHonk)
+
+This implementation uses the **BN254** curve with Noir's UltraHonk backend:
+
+| Metric | Value |
+|--------|-------|
+| ACIR opcodes | **97** |
+| Proof size | ~16 KB |
+| Proving time | ~400ms |
+| Verification | ~240ms |
+
+## Core Dependencies
+
+| Component | Library | Purpose |
+|-----------|---------|---------|
+| Payment | `@x402/core`, `@x402/evm` | Settlement & Verification |
+| ZK Proofs | `@noir-lang/macaron` | Circuit compilation & proving |
+| Elliptic Curve | `@noble/curves/bn254` | Schnorr signing & verification |
+| Commitments | `@aztec/bb.js` | Pedersen commitments |
 
 ## Quick Start
 
