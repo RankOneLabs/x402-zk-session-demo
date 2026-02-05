@@ -9,11 +9,7 @@
  */
 
 import {
-  hexToBigInt,
-  addSchemePrefix,
   parseSchemePrefix,
-  randomFieldElement,
-  pedersenCommit,
 } from '@demo/crypto';
 import { privateKeyToAccount } from 'viem/accounts';
 import { TransferEvmScheme } from './schemes/TransferEvmScheme.js';
