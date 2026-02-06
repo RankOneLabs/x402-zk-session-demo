@@ -2,9 +2,9 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { spawn, ChildProcess } from 'child_process';
 import { createPublicClient, createWalletClient, http, defineChain } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { createApiServer, ZkSessionMiddleware } from '@demo/api';
-import { ZkSessionClient } from '@demo/cli';
-import { createFacilitatorServer } from '@demo/facilitator';
+import { createApiServer } from '../../api/src/server.js';
+import { ZkCredentialClient } from '../../cli/src/client.js';
+import { createFacilitatorServer } from '../../facilitator/src/server.js';
 import { hexToBigInt, parseSchemePrefix, type X402WithZKCredentialResponse, type PaymentPayload, type PaymentRequirements } from '@demo/crypto';
 // Import x402 client libs for payment payload creation
 import { x402Client } from '@x402/core/client';
@@ -144,7 +144,7 @@ describe('End-to-End Flow', () => {
             serviceId: 1001n,
             secretKey: 123456789n,
             tiers: [
-                { minAmountCents: 10, tier: 1, maxPresentations: 10, durationSeconds: 3600 }
+                { minAmountCents: 10, tier: 1, presentationBudget: 10, durationSeconds: 3600 }
             ],
             evmPayment: {
                 chainId: 31337,
@@ -160,12 +160,12 @@ describe('End-to-End Flow', () => {
 
         // Fetch facilitator's public key from /info endpoint (new spec format)
         const infoResponse = await fetch(`http://localhost:${FACILITATOR_PORT}/info`);
-        const infoData = await infoResponse.json() as { 
+        const infoData = await infoResponse.json() as {
             facilitator_pubkey: string;
             service_id: string;
             credential_suites: string[];
         };
-        
+
         // Parse scheme-prefixed pubkey
         const { value: pubkeyHex } = parseSchemePrefix(infoData.facilitator_pubkey);
         const pubkeyBytes = pubkeyHex.startsWith('0x') ? pubkeyHex.slice(2) : pubkeyHex;
@@ -179,9 +179,9 @@ describe('End-to-End Flow', () => {
         console.log('Starting API Server...');
         apiServer = createApiServer({
             port: API_PORT,
-            zkSession: {
+            zkCredential: {
                 serviceId: 1001n,
-                issuerPubkey: {
+                facilitatorPubkey: {
                     x: hexToBigInt(facilitatorPubkey.x),
                     y: hexToBigInt(facilitatorPubkey.y),
                 },
@@ -214,16 +214,16 @@ describe('End-to-End Flow', () => {
         expect(discoveryData.accepts.length).toBeGreaterThan(0);
         expect(discoveryData.accepts[0].scheme).toBe('exact');
         expect(discoveryData.accepts[0].asset).toBe(usdcAddress);
-        
+
         // Verify zk_credential extension
         expect(discoveryData.extensions?.zk_credential).toBeDefined();
         expect(discoveryData.extensions!.zk_credential!.version).toBe('0.2.0');
         expect(discoveryData.extensions!.zk_credential!.credential_suites).toContain('pedersen-schnorr-poseidon-ultrahonk');
 
         // Parse facilitator URL and payment details from 402 response
-        const zkSession = discoveryData.extensions!.zk_credential!;
+        const zkCredential = discoveryData.extensions!.zk_credential!;
         const paymentReqs = discoveryData.accepts[0];
-        const facilitatorUrl = zkSession.facilitator_url || `http://localhost:${FACILITATOR_PORT}/settle`;
+        const facilitatorUrl = zkCredential.facilitator_url || `http://localhost:${FACILITATOR_PORT}/settle`;
 
         // 1. Mint USDC to User
         const mintAbi = [{
@@ -236,10 +236,10 @@ describe('End-to-End Flow', () => {
 
         const amount = 2_000_000n; // 2 USDC
         const deployerAccount = privateKeyToAccount(ANVIL_PK_0);
-        const deployerWalletClient = createWalletClient({ 
-            chain: anvilChain, 
-            transport: http(ANVIL_RPC), 
-            account: deployerAccount 
+        const deployerWalletClient = createWalletClient({
+            chain: anvilChain,
+            transport: http(ANVIL_RPC),
+            account: deployerAccount
         });
 
         console.log('Minting USDC to user...');
@@ -256,7 +256,7 @@ describe('End-to-End Flow', () => {
         // 2. Create payment payload using x402 client library
         // This handles EIP-3009 authorization and EIP-712 signing automatically
         console.log('Creating payment payload via x402Client...');
-        
+
         // Build PaymentRequirements from the 402 response
         // @x402/evm requires extra.name and extra.version for EIP-712 domain
         const paymentRequirements: PaymentRequirements = {
@@ -273,19 +273,19 @@ describe('End-to-End Flow', () => {
                 version: '1',
             },
         };
-        
+
         // Create x402 client with EVM exact scheme
         // userAccount satisfies ClientEvmSigner interface (has address + signTypedData)
         const x402 = new x402Client();
         registerExactEvmScheme(x402, { signer: userAccount });
-        
+
         // Create payment payload - handles EIP-3009/EIP-712 automatically
         const { x402Version, payload } = await x402.createPaymentPayload({
             x402Version: 2,
             accepts: [paymentRequirements],
             resource: discoveryData.resource,
         });
-        
+
         const paymentPayload: PaymentPayload = {
             x402Version,
             resource: discoveryData.resource,
@@ -299,7 +299,7 @@ describe('End-to-End Flow', () => {
         console.log('Settling payment and obtaining credential...');
         // Use temp storage to avoid conflicts with previous test runs
         const tempStoragePath = path.join(os.tmpdir(), `zk-credential-test-${Date.now()}`, 'credentials.json');
-        const client = new ZkSessionClient({
+        const client = new ZkCredentialClient({
             strategy: 'time-bucketed',
             timeBucketSeconds: 60,
             storagePath: tempStoragePath,

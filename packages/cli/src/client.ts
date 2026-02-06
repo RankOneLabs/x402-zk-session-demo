@@ -50,7 +50,7 @@ import { Noir } from '@noir-lang/noir_js';
 import { UltraHonkBackend } from '@aztec/bb.js';
 import { CompiledCircuit } from '@noir-lang/types';
 import { CredentialStorage, type StoredCredential } from './storage.js';
-import x402Circuit from './circuits/x402_zk_session.json' with { type: 'json' };
+import x402Circuit from './circuits/x402_zk_credential.json' with { type: 'json' };
 import { ProofCache, type CachedProof } from './cache.js';
 
 export type PresentationStrategy =
@@ -85,7 +85,7 @@ export interface Parsed402Response {
   credentialSuites: string[];
 }
 
-export class ZkSessionClient {
+export class ZkCredentialClient {
   private readonly config: ClientConfig;
   private readonly storage: CredentialStorage;
   private readonly proofCache: ProofCache;
@@ -520,6 +520,7 @@ export class ZkSessionClient {
           origin_token: proof.originToken,
           tier: proof.tier,
           expires_at: proof.expiresAt,
+          current_time: proof.currentTime,
         },
       },
     });
@@ -552,8 +553,8 @@ export class ZkSessionClient {
       service_id: fmt(credential.serviceId),
       current_time: fmt(currentTime),
       origin_id: fmt(originId),
-      issuer_pubkey_x: fmt(credential.issuerPubkey.x),
-      issuer_pubkey_y: fmt(credential.issuerPubkey.y),
+      facilitator_pubkey_x: fmt(credential.issuerPubkey.x),
+      facilitator_pubkey_y: fmt(credential.issuerPubkey.y),
 
       // Private inputs
       cred_service_id: fmt(credential.serviceId),
@@ -587,7 +588,7 @@ export class ZkSessionClient {
       console.log(`[Client] Proof size: ${proof.length} bytes, ${publicInputs.length} public inputs`);
 
       // Extract outputs from public inputs
-      // Layout: [service_id, current_time, origin_id, issuer_pubkey_x, issuer_pubkey_y, origin_token, tier, expires_at]
+      // Layout: [service_id, current_time, origin_id, facilitator_pubkey_x, facilitator_pubkey_y, origin_token, tier, expires_at]
       const originToken = publicInputs[5];
       const tier = publicInputs[6];
       const expiresAt = publicInputs[7];
@@ -599,6 +600,7 @@ export class ZkSessionClient {
         originToken: originToken,
         tier: Number(hexToBigInt(tier)),
         expiresAt: Number(hexToBigInt(expiresAt ?? '0x0')),
+        currentTime: Number(currentTime),
         meta: {
           serviceId: credential.serviceId,
           originId: originId.toString(),

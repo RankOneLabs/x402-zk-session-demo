@@ -25,9 +25,9 @@ function createZkBody(originToken: string, tier: number) {
 describe('API Server', () => {
   const config: ApiServerConfig = {
     port: 0, // Random port for testing
-    zkSession: {
+    zkCredential: {
       serviceId: 1n,
-      issuerPubkey: { x: 1n, y: 2n },
+      facilitatorPubkey: { x: 1n, y: 2n },
       rateLimit: {
         maxRequestsPerToken: 10,
         windowSeconds: 60,
@@ -41,9 +41,9 @@ describe('API Server', () => {
   describe('Public endpoints', () => {
     it('GET /health should return ok status', async () => {
       const { app } = createApiServer(config);
-      
+
       const res = await request(app).get('/health');
-      
+
       expect(res.status).toBe(200);
       expect(res.body).toEqual({
         status: 'ok',
@@ -53,9 +53,9 @@ describe('API Server', () => {
 
     it('GET /stats should return rate limiter stats', async () => {
       const { app } = createApiServer(config);
-      
+
       const res = await request(app).get('/stats');
-      
+
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('totalTokens');
       expect(res.body).toHaveProperty('totalRequests');
@@ -64,11 +64,11 @@ describe('API Server', () => {
   });
 
   describe('Protected endpoints - authentication', () => {
-    it('should return 402 Payment Required without Authorization header', async () => {
+    it('should return 402 Payment Required without zk_credential body', async () => {
       const { app } = createApiServer(config);
-      
+
       const res = await request(app).get('/api/whoami');
-      
+
       expect(res.status).toBe(402); // x402: Payment Required
       expect(res.body.x402Version).toBe(2);
       expect(res.body.accepts).toBeDefined();
@@ -98,11 +98,11 @@ describe('API Server', () => {
     it('should accept requests with valid ZK credential body', async () => {
       const { app } = createApiServer(config);
       const body = createZkBody('0xabc123', 1);
-      
+
       const res = await request(app)
         .get('/api/whoami')
         .send(body);
-      
+
       expect(res.status).toBe(200);
       expect(res.body.tier).toBe(1);
       expect(res.body.message).toBe('You have valid ZK credentials!');
@@ -113,37 +113,37 @@ describe('API Server', () => {
     it('should reject tier below minimum', async () => {
       const minTierConfig: ApiServerConfig = {
         ...config,
-        zkSession: {
-          ...config.zkSession,
+        zkCredential: {
+          ...config.zkCredential,
           minTier: 2,
         },
       };
       const { app } = createApiServer(minTierConfig);
       const body = createZkBody('0xabc123', 1);
-      
+
       const res = await request(app)
         .get('/api/whoami')
         .send(body);
-      
-      expect(res.status).toBe(403);
+
+      expect(res.status).toBe(402);
       expect(res.body.error).toBe('tier_insufficient');
     });
 
     it('should accept tier at minimum', async () => {
       const minTierConfig: ApiServerConfig = {
         ...config,
-        zkSession: {
-          ...config.zkSession,
+        zkCredential: {
+          ...config.zkCredential,
           minTier: 1,
         },
       };
       const { app } = createApiServer(minTierConfig);
       const body = createZkBody('0xabc123', 1);
-      
+
       const res = await request(app)
         .get('/api/whoami')
         .send(body);
-      
+
       expect(res.status).toBe(200);
     });
   });
@@ -152,11 +152,11 @@ describe('API Server', () => {
     it('should include rate limit headers in response', async () => {
       const { app } = createApiServer(config);
       const body = createZkBody('0xratelimit1', 1);
-      
+
       const res = await request(app)
         .get('/api/whoami')
         .send(body);
-      
+
       expect(res.status).toBe(200);
       expect(res.headers['x-ratelimit-limit']).toBe('10');
       expect(res.headers['x-ratelimit-remaining']).toBe('9');
@@ -166,15 +166,15 @@ describe('API Server', () => {
     it('should decrement remaining count on each request', async () => {
       const { app } = createApiServer(config);
       const body = createZkBody('0xratelimit2', 1);
-      
+
       // First request
       const res1 = await request(app).get('/api/whoami').send(body);
       expect(res1.headers['x-ratelimit-remaining']).toBe('9');
-      
+
       // Second request
       const res2 = await request(app).get('/api/whoami').send(body);
       expect(res2.headers['x-ratelimit-remaining']).toBe('8');
-      
+
       // Third request
       const res3 = await request(app).get('/api/whoami').send(body);
       expect(res3.headers['x-ratelimit-remaining']).toBe('7');
@@ -183,8 +183,8 @@ describe('API Server', () => {
     it('should return 429 when rate limit exceeded', async () => {
       const limitedConfig: ApiServerConfig = {
         ...config,
-        zkSession: {
-          ...config.zkSession,
+        zkCredential: {
+          ...config.zkCredential,
           rateLimit: {
             maxRequestsPerToken: 3,
             windowSeconds: 60,
@@ -193,15 +193,15 @@ describe('API Server', () => {
       };
       const { app } = createApiServer(limitedConfig);
       const body = createZkBody('0xratelimit3', 1);
-      
+
       // Make requests up to limit
       await request(app).get('/api/whoami').send(body);
       await request(app).get('/api/whoami').send(body);
       await request(app).get('/api/whoami').send(body);
-      
+
       // Fourth request should be rate limited
       const res = await request(app).get('/api/whoami').send(body);
-      
+
       expect(res.status).toBe(429);
       expect(res.body.error).toBe('rate_limited');
     });
@@ -209,8 +209,8 @@ describe('API Server', () => {
     it('should rate limit independently per origin token', async () => {
       const limitedConfig: ApiServerConfig = {
         ...config,
-        zkSession: {
-          ...config.zkSession,
+        zkCredential: {
+          ...config.zkCredential,
           rateLimit: {
             maxRequestsPerToken: 2,
             windowSeconds: 60,
@@ -220,13 +220,13 @@ describe('API Server', () => {
       const { app } = createApiServer(limitedConfig);
       const body1 = createZkBody('0xuser1', 1);
       const body2 = createZkBody('0xuser2', 1);
-      
+
       // User 1 hits limit
       await request(app).get('/api/whoami').send(body1);
       await request(app).get('/api/whoami').send(body1);
       const res1 = await request(app).get('/api/whoami').send(body1);
       expect(res1.status).toBe(429);
-      
+
       // User 2 should still have quota
       const res2 = await request(app).get('/api/whoami').send(body2);
       expect(res2.status).toBe(200);
@@ -238,11 +238,11 @@ describe('API Server', () => {
       const { app } = createApiServer(config);
       const longToken = '0x1234567890abcdef1234567890abcdef';
       const body = createZkBody(longToken, 2);
-      
+
       const res = await request(app)
         .get('/api/whoami')
         .send(body);
-      
+
       expect(res.status).toBe(200);
       expect(res.body.tier).toBe(2);
       // Token is truncated to first 16 chars + "..."
@@ -254,11 +254,11 @@ describe('API Server', () => {
       const { app } = createApiServer(config);
       const shortToken = '0xabc';
       const body = createZkBody(shortToken, 1);
-      
+
       const res = await request(app)
         .get('/api/whoami')
         .send(body);
-      
+
       expect(res.status).toBe(200);
       expect(res.body.originToken).toBe('0xabc');
     });
@@ -268,11 +268,11 @@ describe('API Server', () => {
     it('should return tier-based response for tier 0', async () => {
       const { app } = createApiServer(config);
       const body = createZkBody('0xchat0', 0);
-      
+
       const res = await request(app)
         .post('/api/chat')
         .send({ ...body, message: 'Hello' });
-      
+
       expect(res.status).toBe(200);
       expect(res.body.response).toBe('[Basic] Echo: Hello');
       expect(res.body.tier).toBe(0);
@@ -282,11 +282,11 @@ describe('API Server', () => {
     it('should return tier-based response for tier 1', async () => {
       const { app } = createApiServer(config);
       const body = createZkBody('0xchat1', 1);
-      
+
       const res = await request(app)
         .post('/api/chat')
         .send({ ...body, message: 'Process this' });
-      
+
       expect(res.status).toBe(200);
       expect(res.body.response).toBe('[Pro] Processing: Process this');
       expect(res.body.tier).toBe(1);
@@ -295,11 +295,11 @@ describe('API Server', () => {
     it('should return tier-based response for tier 2', async () => {
       const { app } = createApiServer(config);
       const body = createZkBody('0xchat2', 2);
-      
+
       const res = await request(app)
         .post('/api/chat')
         .send({ ...body, message: 'Priority request' });
-      
+
       expect(res.status).toBe(200);
       expect(res.body.response).toBe('[Enterprise] Priority response to: Priority request');
       expect(res.body.tier).toBe(2);
@@ -310,11 +310,11 @@ describe('API Server', () => {
     it('should return basic data for tier 0', async () => {
       const { app } = createApiServer(config);
       const body = createZkBody('0xdata0', 0);
-      
+
       const res = await request(app)
         .get('/api/data')
         .send(body);
-      
+
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ message: 'Hello, World!' });
     });
@@ -322,11 +322,11 @@ describe('API Server', () => {
     it('should return pro data for tier 1', async () => {
       const { app } = createApiServer(config);
       const body = createZkBody('0xdata1', 1);
-      
+
       const res = await request(app)
         .get('/api/data')
         .send(body);
-      
+
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ items: [1, 2, 3, 4, 5], count: 5 });
     });
@@ -334,11 +334,11 @@ describe('API Server', () => {
     it('should return enterprise data for tier 2', async () => {
       const { app } = createApiServer(config);
       const body = createZkBody('0xdata2', 2);
-      
+
       const res = await request(app)
         .get('/api/data')
         .send(body);
-      
+
       expect(res.status).toBe(200);
       expect(res.body.count).toBe(100);
       expect(res.body.premium).toBe(true);
@@ -348,11 +348,11 @@ describe('API Server', () => {
     it('should return enterprise data for tier 3 (above max)', async () => {
       const { app } = createApiServer(config);
       const body = createZkBody('0xdata3', 3);
-      
+
       const res = await request(app)
         .get('/api/data')
         .send(body);
-      
+
       expect(res.status).toBe(200);
       expect(res.body.premium).toBe(true);
     });
@@ -361,9 +361,9 @@ describe('API Server', () => {
   describe('Error handling', () => {
     it('should return 402 for unknown routes (auth check first)', async () => {
       const { app } = createApiServer(config);
-      
+
       const res = await request(app).get('/api/unknown');
-      
+
       expect(res.status).toBe(402); // x402: Payment Required - auth check happens first on /api/*
     });
 
@@ -381,22 +381,22 @@ describe('API Server', () => {
   describe('CORS', () => {
     it('should include CORS headers', async () => {
       const { app } = createApiServer(config);
-      
+
       const res = await request(app)
         .get('/health')
         .set('Origin', 'http://example.com');
-      
+
       expect(res.headers['access-control-allow-origin']).toBeDefined();
     });
 
     it('should expose rate limit headers in CORS', async () => {
       const { app } = createApiServer(config);
-      
+
       const res = await request(app)
         .options('/api/whoami')
         .set('Origin', 'http://example.com')
         .set('Access-Control-Request-Method', 'GET');
-      
+
       const exposed = res.headers['access-control-expose-headers'] ?? '';
       expect(exposed).toContain('X-RateLimit-Limit');
       expect(exposed).toContain('X-RateLimit-Remaining');

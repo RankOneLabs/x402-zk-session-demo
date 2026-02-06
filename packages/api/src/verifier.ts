@@ -121,10 +121,10 @@ export class ZkVerifier {
   private findCircuitPath(): string | null {
     const searchPaths = [
       // Relative to this file (api/src/)
-      join(__dirname, 'circuits/x402_zk_session.json'),
-      join(__dirname, '../../../circuits/target/x402_zk_session.json'),
+      join(__dirname, 'circuits/x402_zk_credential.json'),
+      join(__dirname, '../../../circuits/target/x402_zk_credential.json'),
       // Relative to project root
-      join(process.cwd(), 'circuits/target/x402_zk_session.json'),
+      join(process.cwd(), 'circuits/target/x402_zk_credential.json'),
     ];
 
     for (const path of searchPaths) {
@@ -194,13 +194,13 @@ export class ZkVerifier {
 
     try {
       // Verify the proof
-      // Public inputs order: service_id, current_time, origin_id, issuer_pubkey_x, issuer_pubkey_y
-      // Public outputs: origin_token, tier
+      // Public inputs order: service_id, current_time, origin_id, facilitator_pubkey_x, facilitator_pubkey_y
+      // Public outputs: origin_token, tier, expires_at
       // UltraHonkBackend expects proof as Uint8Array, not Buffer
-      const proofArray = proofData.proof instanceof Uint8Array 
-        ? proofData.proof 
+      const proofArray = proofData.proof instanceof Uint8Array
+        ? proofData.proof
         : new Uint8Array(proofData.proof);
-      
+
       const isValid = await this.backend.verifyProof({
         proof: proofArray,
         publicInputs: proofData.publicInputs,

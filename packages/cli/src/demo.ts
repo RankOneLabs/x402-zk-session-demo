@@ -14,7 +14,7 @@ import { parseSchemePrefix, type PaymentRequirements, type PaymentPayload } from
 import { privateKeyToAccount } from 'viem/accounts';
 import { x402Client } from '@x402/core/client';
 import { registerExactEvmScheme } from '@x402/evm/exact/client';
-import { ZkSessionClient } from './client.js';
+import { ZkCredentialClient } from './client.js';
 
 // Configuration
 const API_URL = process.env.API_URL ?? 'http://localhost:3002';
@@ -22,7 +22,7 @@ const PRIVATE_KEY = (process.env.PRIVATE_KEY ?? '0x59c6995e998f97a5a0044966f0945
 
 async function main() {
   console.log('=== ZK Credential Client Demo ===\n');
-  
+
   const account = privateKeyToAccount(PRIVATE_KEY);
   console.log(`Using account: ${account.address}\n`);
 
@@ -47,7 +47,7 @@ async function main() {
   }
 
   const discoveryData = await discoveryResponse.json() as any;
-  
+
   if (!discoveryData.extensions?.zk_credential) {
     console.error('✗ Missing zk_credential extension in 402 response');
     process.exit(1);
@@ -90,7 +90,7 @@ async function main() {
   };
 
   console.log('1. Creating payment payload via x402Client...');
-  
+
   // Create x402 client with EVM exact scheme
   const x402 = new x402Client();
   registerExactEvmScheme(x402, { signer: account });
@@ -113,7 +113,7 @@ async function main() {
 
   console.log('2. Settling payment and obtaining credential...');
 
-  const client = new ZkSessionClient({
+  const client = new ZkCredentialClient({
     strategy: 'time-bucketed',
     timeBucketSeconds: 60,
   });
@@ -154,7 +154,7 @@ async function main() {
 
   // Test /api/chat
   const messages = ['Hello!', 'How does this work?', 'Is this really anonymous?'];
-  
+
   for (const [i, msg] of messages.entries()) {
     console.log(`${i + 2}. POST /api/chat { message: "${msg}" }`);
 

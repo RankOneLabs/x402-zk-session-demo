@@ -1,7 +1,7 @@
 
 import { UltraHonkBackend } from '@aztec/bb.js';
 import { Noir } from '@noir-lang/noir_js';
-import x402Circuit from '../src/circuits/x402_zk_session.json' with { type: 'json' };
+import x402Circuit from '../src/circuits/x402_zk_credential.json' with { type: 'json' };
 import {
     pedersenCommit,
     generateKeypair,
@@ -58,8 +58,8 @@ async function main() {
         service_id: fmt(serviceId),
         current_time: fmt(currentTime),
         origin_id: fmt(originId),
-        issuer_pubkey_x: fmt(publicKey.x),
-        issuer_pubkey_y: fmt(publicKey.y),
+        facilitator_pubkey_x: fmt(publicKey.x),
+        facilitator_pubkey_y: fmt(publicKey.y),
 
         cred_service_id: fmt(serviceId),
         cred_tier: fmt(credTier),

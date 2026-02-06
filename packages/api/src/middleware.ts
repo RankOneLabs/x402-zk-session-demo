@@ -33,7 +33,7 @@ import { ZkVerifier } from './verifier.js';
 /**
  * Structured error types for payment processing
  */
-type PaymentErrorCode = 
+type PaymentErrorCode =
   | 'INVALID_REQUEST_STRUCTURE'
   | 'PAYMENT_REJECTED'
   | 'FACILITATOR_UNAVAILABLE'
@@ -51,11 +51,11 @@ class PaymentError extends Error {
   }
 }
 
-export interface ZkSessionConfig {
+export interface ZkCredentialConfig {
   /** Service ID this server accepts credentials for */
   serviceId: bigint;
-  /** Issuer's public key */
-  issuerPubkey: Point;
+  /** Facilitator's public key for verifying credentials (spec §9.2) */
+  facilitatorPubkey: Point;
   /** Rate limiting configuration */
   rateLimit: RateLimitConfig;
   /** Minimum tier required (default: 0) */
@@ -76,8 +76,8 @@ export interface ZkSessionConfig {
   resourceDescription?: string;
 }
 
-/** Discriminated union for session verification results */
-export type SessionVerificationResult =
+/** Discriminated union for credential verification results */
+export type CredentialVerificationResult =
   | { valid: true; tier: number; originToken: string }
   | { valid: false; errorCode: ZKCredentialErrorCode; message?: string };
 
@@ -85,7 +85,7 @@ export type SessionVerificationResult =
 declare global {
   namespace Express {
     interface Request {
-      zkSession?: {
+      zkCredential?: {
         tier: number;
         originToken: string;
       };
@@ -93,12 +93,12 @@ declare global {
   }
 }
 
-export class ZkSessionMiddleware {
+export class ZkCredentialMiddleware {
   private rateLimiter: RateLimiter;
   private verifier: ZkVerifier;
   private pruneIntervalId: NodeJS.Timeout | null = null;
 
-  constructor(private readonly config: ZkSessionConfig) {
+  constructor(private readonly config: ZkCredentialConfig) {
     this.rateLimiter = new RateLimiter(config.rateLimit);
     this.verifier = new ZkVerifier({
       skipVerification: config.skipProofVerification,
@@ -108,7 +108,7 @@ export class ZkSessionMiddleware {
     this.pruneIntervalId = setInterval(() => {
       const pruned = this.rateLimiter.prune();
       if (pruned > 0) {
-        console.log(`[ZkSession] Pruned ${pruned} expired rate limit entries`);
+        console.log(`[ZkCredential] Pruned ${pruned} expired rate limit entries`);
       }
     }, 60000);
 
@@ -120,8 +120,8 @@ export class ZkSessionMiddleware {
    * Get suite-prefixed public key for 402 response
    */
   private getFacilitatorPubkeyPrefixed(): string {
-    const xHex = this.config.issuerPubkey.x.toString(16).padStart(64, '0');
-    const yHex = this.config.issuerPubkey.y.toString(16).padStart(64, '0');
+    const xHex = this.config.facilitatorPubkey.x.toString(16).padStart(64, '0');
+    const yHex = this.config.facilitatorPubkey.y.toString(16).padStart(64, '0');
     return addSchemePrefix('pedersen-schnorr-poseidon-ultrahonk', `0x04${xHex}${yHex}`);
   }
 
@@ -151,7 +151,7 @@ export class ZkSessionMiddleware {
    */
   private build402Response(resourceUrl: string): X402WithZKCredentialResponse {
     const paymentReqs = this.buildPaymentRequirements();
-    
+
     return {
       x402Version: 2,
       resource: {
@@ -207,7 +207,7 @@ export class ZkSessionMiddleware {
         ?.extensions?.zk_credential;
       if (payment) {
         try {
-          console.log('[ZkSession] Processing payment body...');
+          console.log('[ZkCredential] Processing payment body...');
 
           if (!paymentBody || typeof paymentBody !== 'object') {
             throw new PaymentError('INVALID_REQUEST_STRUCTURE', 400, 'Missing payment body');
@@ -340,12 +340,12 @@ export class ZkSessionMiddleware {
             },
           };
 
-          console.log('[ZkSession] Payment settled, credential issued. Returning credential.');
+          console.log('[ZkCredential] Payment settled, credential issued. Returning credential.');
           res.status(200).json(clientResp);
           return;
 
         } catch (error) {
-          console.error('[ZkSession] Payment processing failed:', error instanceof Error ? error.message : String(error));
+          console.error('[ZkCredential] Payment processing failed:', error instanceof Error ? error.message : String(error));
 
           if (error instanceof PaymentError) {
             res.status(error.httpStatus).json({
@@ -395,8 +395,8 @@ export class ZkSessionMiddleware {
         return;
       }
 
-      // Attach session info to request
-      req.zkSession = {
+      // Attach credential info to request
+      req.zkCredential = {
         tier: result.tier,
         originToken: result.originToken,
       };
@@ -412,7 +412,7 @@ export class ZkSessionMiddleware {
     suite: string;
     kid?: string;
     proofB64: string;
-    publicOutputs: { originToken: string; tier: number; expiresAt: number };
+    publicOutputs: { originToken: string; tier: number; expiresAt: number; currentTime?: number };
   } | null {
     const body = req.body as Record<string, unknown> | undefined;
     const zkCredential = (body as { zk_credential?: Record<string, unknown> } | undefined)?.zk_credential;
@@ -432,8 +432,13 @@ export class ZkSessionMiddleware {
     const originToken = publicOutputs.origin_token;
     const tier = publicOutputs.tier;
     const expiresAt = publicOutputs.expires_at;
+    const currentTime = publicOutputs.current_time;
 
     if (typeof originToken !== 'string' || typeof tier !== 'number' || typeof expiresAt !== 'number') {
+      return null;
+    }
+    // current_time is optional; if present it must be a number
+    if (currentTime !== undefined && typeof currentTime !== 'number') {
       return null;
     }
 
@@ -441,7 +446,7 @@ export class ZkSessionMiddleware {
       suite,
       kid: typeof kid === 'string' ? kid : undefined,
       proofB64,
-      publicOutputs: { originToken, tier, expiresAt },
+      publicOutputs: { originToken, tier, expiresAt, currentTime: typeof currentTime === 'number' ? currentTime : undefined },
     };
   }
 
@@ -459,7 +464,7 @@ export class ZkSessionMiddleware {
    * 8. Check tier meets endpoint requirement
    * 9. Return success (rate limiting handled by middleware)
    */
-  async verifyRequest(req: Request): Promise<SessionVerificationResult> {
+  async verifyRequest(req: Request): Promise<CredentialVerificationResult> {
     // Step 1-2: Parse request body
     const presentation = this.parseProofEnvelope(req);
     if (!presentation) {
@@ -477,14 +482,28 @@ export class ZkSessionMiddleware {
     }
 
     const originId = this.computeOriginId(req);
-    const currentTime = BigInt(Math.floor(Date.now() / 1000));
+    const serverTime = BigInt(Math.floor(Date.now() / 1000));
+    // Use the current_time from the presentation if provided (matches the proof),
+    // otherwise fall back to server time
+    const proofTime = presentation.publicOutputs.currentTime != null
+      ? BigInt(presentation.publicOutputs.currentTime)
+      : serverTime;
+
+    // Validate the proof's current_time is within acceptable drift (±120 seconds)
+    if (presentation.publicOutputs.currentTime != null) {
+      const MAX_TIME_DRIFT = 120n;
+      const timeDiff = serverTime > proofTime ? serverTime - proofTime : proofTime - serverTime;
+      if (timeDiff > MAX_TIME_DRIFT) {
+        return { valid: false, errorCode: 'invalid_proof', message: `Proof time drift too large: ${timeDiff}s` };
+      }
+    }
 
     // Skip proof verification in development mode
     if (this.config.skipProofVerification) {
-      console.log(`[ZkSession] Skipping proof verification (dev mode)`);
+      console.log(`[ZkCredential] Skipping proof verification (dev mode)`);
       const { tier, originToken, expiresAt } = presentation.publicOutputs;
 
-      if (expiresAt < Number(currentTime - 60n)) {
+      if (expiresAt < Number(serverTime - 60n)) {
         return { valid: false, errorCode: 'credential_expired', message: 'Credential expired' };
       }
 
@@ -498,10 +517,10 @@ export class ZkSessionMiddleware {
 
     const publicInputs = [
       bigIntToHex(this.config.serviceId),
-      bigIntToHex(currentTime),
+      bigIntToHex(proofTime),
       bigIntToHex(originId),
-      bigIntToHex(this.config.issuerPubkey.x),
-      bigIntToHex(this.config.issuerPubkey.y),
+      bigIntToHex(this.config.facilitatorPubkey.x),
+      bigIntToHex(this.config.facilitatorPubkey.y),
       presentation.publicOutputs.originToken,
       bigIntToHex(BigInt(presentation.publicOutputs.tier)),
       bigIntToHex(BigInt(presentation.publicOutputs.expiresAt)),
@@ -525,7 +544,7 @@ export class ZkSessionMiddleware {
       const tier = result.outputs?.tier ?? 0;
       const expiresAt = result.outputs?.expiresAt ?? 0;
 
-      if (expiresAt < Number(currentTime - 60n)) {
+      if (expiresAt < Number(serverTime - 60n)) {
         return { valid: false, errorCode: 'credential_expired', message: 'Credential expired' };
       }
 

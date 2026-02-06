@@ -33,8 +33,8 @@ vi.mock('@demo/crypto', async (importOriginal) => {
 const TEST_SERVICE_ID = 1001n;
 const TEST_SECRET_KEY = 123456789n;
 const TEST_TIERS: TierConfig[] = [
-  { minAmountCents: 100, tier: 2, maxPresentations: 50, durationSeconds: 86400 }, // $1.00
-  { minAmountCents: 10, tier: 1, maxPresentations: 10, durationSeconds: 3600 },   // $0.10
+  { minAmountCents: 100, tier: 2, presentationBudget: 50, durationSeconds: 86400 }, // $1.00
+  { minAmountCents: 10, tier: 1, presentationBudget: 10, durationSeconds: 3600 },   // $0.10
 ];
 
 const TEST_COMMITMENT_X = '1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef';
@@ -158,13 +158,13 @@ describe('CredentialIssuer.settle()', () => {
 
       // Verify credential structure
       const cred = response.extensions.zk_credential.credential;
-      expect(cred.scheme).toBe('pedersen-schnorr-poseidon-ultrahonk');
+      expect(cred.suite).toBe('pedersen-schnorr-poseidon-ultrahonk');
       expect(cred.service_id).toBe('0x00000000000000000000000000000000000000000000000000000000000003e9'); // 1001n
       expect(cred.tier).toBe(1); // $0.10 qualifies for tier 1
       expect(cred.presentation_budget).toBe(10);
       expect(cred.issued_at).toBe(Math.floor(new Date('2026-01-15T12:00:00Z').getTime() / 1000));
       expect(cred.expires_at).toBe(cred.issued_at + 3600); // tier 1 duration
-      expect(cred.commitment).toMatch(/^0x04[a-f0-9]{128}$/);
+      expect(cred.commitment).toMatch(/^pedersen-schnorr-poseidon-ultrahonk:0x04[a-f0-9]{128}$/);
       expect(cred.signature).toMatch(/^0x[a-f0-9]{192}$/); // r.x + r.y + s
     });
 
@@ -196,7 +196,7 @@ describe('CredentialIssuer.settle()', () => {
           usdcDecimals: 18, // Different decimals
         },
       });
-      
+
       const request = createSettlementRequest({
         paymentRequirements: {
           ...TEST_PAYMENT_REQUIREMENTS,
@@ -327,7 +327,7 @@ describe('CredentialIssuer.settle()', () => {
 
     it('should assign correct tier at exact boundary', async () => {
       const issuer = createIssuer();
-      
+
       // Exactly $0.10 (10 cents)
       const request = createSettlementRequest({
         paymentRequirements: {
@@ -343,9 +343,9 @@ describe('CredentialIssuer.settle()', () => {
     it('should assign highest qualifying tier', async () => {
       const issuer = createIssuer({
         tiers: [
-          { minAmountCents: 500, tier: 3, maxPresentations: 100, durationSeconds: 604800 }, // $5.00
-          { minAmountCents: 100, tier: 2, maxPresentations: 50, durationSeconds: 86400 },   // $1.00
-          { minAmountCents: 10, tier: 1, maxPresentations: 10, durationSeconds: 3600 },     // $0.10
+          { minAmountCents: 500, tier: 3, presentationBudget: 100, durationSeconds: 604800 }, // $5.00
+          { minAmountCents: 100, tier: 2, presentationBudget: 50, durationSeconds: 86400 },   // $1.00
+          { minAmountCents: 10, tier: 1, presentationBudget: 10, durationSeconds: 3600 },     // $0.10
         ],
       });
 
@@ -383,7 +383,7 @@ describe('CredentialIssuer.settle()', () => {
       const response = await issuer.settle(request);
 
       expect(response.extensions.zk_credential.credential.commitment).toBe(
-        `0x04${TEST_COMMITMENT_X}${TEST_COMMITMENT_Y}`
+        `pedersen-schnorr-poseidon-ultrahonk:0x04${TEST_COMMITMENT_X}${TEST_COMMITMENT_Y}`
       );
     });
 

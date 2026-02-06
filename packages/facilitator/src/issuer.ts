@@ -69,8 +69,8 @@ export interface TierConfig {
   minAmountCents: number;
   /** Tier level (0 = basic, 1 = pro, etc.) */
   tier: number;
-  /** Maximum presentations allowed */
-  maxPresentations: number;
+  /** Maximum presentations allowed (presentation_budget per spec) */
+  presentationBudget: number;
   /** Duration in seconds */
   durationSeconds: number;
 }
@@ -244,7 +244,7 @@ export class CredentialIssuer {
     const message = poseidonHash7(
       this.config.serviceId,
       BigInt(tierConfig.tier),
-      BigInt(tierConfig.maxPresentations),
+      BigInt(tierConfig.presentationBudget),
       BigInt(now),
       BigInt(expiresAt),
       userCommitment.x,
@@ -261,8 +261,8 @@ export class CredentialIssuer {
     const commitmentOutHex = addSchemePrefix(
       'pedersen-schnorr-poseidon-ultrahonk',
       '0x04' +
-        userCommitment.x.toString(16).padStart(64, '0') +
-        userCommitment.y.toString(16).padStart(64, '0')
+      userCommitment.x.toString(16).padStart(64, '0') +
+      userCommitment.y.toString(16).padStart(64, '0')
     );
 
     const response: SettlementResponse = {
@@ -277,7 +277,7 @@ export class CredentialIssuer {
             suite: 'pedersen-schnorr-poseidon-ultrahonk',
             service_id: bigIntToHex(this.config.serviceId),
             tier: tierConfig.tier,
-            presentation_budget: tierConfig.maxPresentations,
+            presentation_budget: tierConfig.presentationBudget,
             issued_at: now,
             expires_at: expiresAt,
             commitment: commitmentOutHex,
