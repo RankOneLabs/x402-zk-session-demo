@@ -20,6 +20,8 @@ import {
   type CredentialWireFormat,
   type PaymentPayload,
   type PaymentRequirements,
+  type ZKCredentialKey,
+  type ZKCredentialKeysResponse,
 } from '@demo/crypto';
 
 /** Settlement request for x402 v2 */
@@ -93,6 +95,8 @@ export class ZkCredentialClient {
 
   // Cache facilitator pubkey from 402 response
   private facilitatorPubkeyCache: Map<string, { x: string; y: string }> = new Map();
+  // Cache well-known keys
+  private knownKeys: Map<string, ZKCredentialKey[]> = new Map();
 
   constructor(config: Partial<ClientConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -163,6 +167,22 @@ export class ZkCredentialClient {
     this.facilitatorPubkeyCache.set(parsed.facilitatorUrl, parsed.facilitatorPubkey);
 
     return parsed;
+  }
+
+  /**
+   * Fetch keys from /.well-known/zk-credential-keys (spec §11)
+   */
+  async fetchWellKnownKeys(baseUrl: string): Promise<ZKCredentialKey[]> {
+    try {
+      const url = new URL('/.well-known/zk-credential-keys', baseUrl).toString();
+      const response = await fetch(url);
+      if (!response.ok) return [];
+
+      const data = await response.json() as ZKCredentialKeysResponse;
+      return data.keys || [];
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -290,6 +310,7 @@ export class ZkCredentialClient {
 
     return {
       serviceId: wire.service_id,
+      kid: wire.kid,
       tier: wire.tier,
       identityLimit: wire.identity_limit,
       issuedAt: wire.issued_at,
@@ -441,17 +462,40 @@ export class ZkCredentialClient {
       throw new Error('Credential expired. Obtain a new one.');
     }
 
-    // Ensure we have facilitator pubkey (either from stored credential or options)
-    const storedFacilitatorPubkey =
-      credential.facilitatorPubkey && credential.facilitatorPubkey.x !== '0x0'
-        ? credential.facilitatorPubkey
-        : undefined;
+    // Ensure we have facilitator pubkey
+    let facilitatorPubkey = options.facilitatorPubkey;
 
-    const facilitatorPubkey = options.facilitatorPubkey ?? storedFacilitatorPubkey;
+    // 1. Try to use kid if present in credential to find the correct key
+    if (!facilitatorPubkey && credential.kid) {
+      // Check cache first or fetch
+      let keys = this.knownKeys.get(credential.facilitatorUrl);
+      if (!keys) {
+        try {
+          keys = await this.fetchWellKnownKeys(credential.facilitatorUrl);
+          this.knownKeys.set(credential.facilitatorUrl, keys);
+        } catch (e) {
+          console.warn('[Client] Failed to fetch well-known keys:', e);
+        }
+      }
+
+      if (keys) {
+        const key = keys.find((k: ZKCredentialKey) => k.kid === credential.kid);
+        if (key) {
+          facilitatorPubkey = { x: key.x, y: key.y };
+        }
+      }
+    }
+
+    // 2. Fallback to stored key in credential
+    if (!facilitatorPubkey) {
+      if (credential.facilitatorPubkey && credential.facilitatorPubkey.x !== '0x0') {
+        facilitatorPubkey = credential.facilitatorPubkey;
+      }
+    }
 
     if (!facilitatorPubkey) {
       throw new Error(
-        'Facilitator public key not available. Provide it via options.facilitatorPubkey'
+        'Facilitator public key not available. Provide it via options.facilitatorPubkey or ensure credential has valid key/kid'
       );
     }
 

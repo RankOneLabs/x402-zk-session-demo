@@ -12,6 +12,7 @@ import type { Point, SchnorrSignature } from '@demo/crypto';
 export interface StoredCredential {
   // Credential from issuer
   serviceId: string;
+  kid?: string;
   tier: number;
   identityLimit: number;
   issuedAt: number;

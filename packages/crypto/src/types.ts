@@ -146,7 +146,7 @@ export interface X402PaymentRequest {
 /** Credential in wire format (JSON-serializable) */
 export interface CredentialWireFormat {
   suite: ZKCredentialSuite;
-  kid?: string;
+  kid: string;
   service_id: string;
   tier: number;
   identity_limit: number;
@@ -226,4 +226,23 @@ export function parseSchemePrefix(prefixed: string): { scheme: ZKCredentialSuite
 /** Create scheme-prefixed string */
 export function addSchemePrefix(scheme: ZKCredentialSuite, value: string): string {
   return `${scheme}:${value}`;
+}
+
+// =============================================================================
+// Key Discovery Types (spec §11)
+// =============================================================================
+
+/** JWK-like key format for ZK keys */
+export interface ZKCredentialKey {
+  kid: string;
+  alg: ZKCredentialSuite;
+  kty: 'ZK';
+  crv: 'BN254';
+  x: string; // hex formatted
+  y: string; // hex formatted
+}
+
+/** Response from /.well-known/zk-credential-keys */
+export interface ZKCredentialKeysResponse {
+  keys: ZKCredentialKey[];
 }

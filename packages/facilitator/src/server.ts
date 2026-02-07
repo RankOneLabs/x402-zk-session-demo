@@ -49,6 +49,26 @@ export function createFacilitatorServer(config: FacilitatorServerConfig) {
     });
   });
 
+  // Well-known keys endpoint (spec §11)
+  app.get('/.well-known/zk-credential-keys', async (_req, res) => {
+    const pubKey = await facilitator.getPublicKey();
+    const xHex = '0x' + pubKey.x.toString(16).padStart(64, '0');
+    const yHex = '0x' + pubKey.y.toString(16).padStart(64, '0');
+
+    res.json({
+      keys: [
+        {
+          kid: config.kid ?? '1',
+          alg: 'pedersen-schnorr-poseidon-ultrahonk',
+          kty: 'ZK',
+          crv: 'BN254',
+          x: xHex,
+          y: yHex,
+        }
+      ]
+    });
+  });
+
   // Settlement endpoint (spec §8.3, §8.4)
   // x402 v2 format with signed payment payload
   app.post('/settle', async (req: Request, res: Response, next: NextFunction) => {

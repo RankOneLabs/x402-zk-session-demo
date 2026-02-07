@@ -95,6 +95,8 @@ export interface IssuerConfig {
   serviceId: bigint;
   /** Issuer's secret key for signing ZK credentials */
   secretKey: bigint;
+  /** Key ID for the secret key (optional, defaults to '1') */
+  kid?: string;
   /** Pricing tiers (sorted by minAmountCents descending by the issuer) */
   tiers: TierConfig[];
   /** Enable mock payments for testing */
@@ -278,6 +280,7 @@ export class CredentialIssuer {
             service_id: bigIntToHex(this.config.serviceId),
             tier: tierConfig.tier,
             identity_limit: tierConfig.identityLimit,
+            kid: this.config.kid ?? '1',
             issued_at: now,
             expires_at: expiresAt,
             commitment: commitmentOutHex,
