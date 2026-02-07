@@ -473,7 +473,7 @@ export class ZkCredentialClient {
         try {
           keys = await this.fetchWellKnownKeys(credential.facilitatorUrl);
           // Only cache non-empty key lists to allow retries on transient failures
-          if (keys && keys.length > 0) {
+          if (keys.length > 0) {
             this.knownKeys.set(credential.facilitatorUrl, keys);
           }
         } catch (e) {
