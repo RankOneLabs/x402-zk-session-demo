@@ -57,7 +57,7 @@ export interface SignedCredential {
   suite: ZKCredentialSuite;
   serviceId: bigint;
   tier: number;
-  presentationBudget: number;
+  identityLimit: number;
   issuedAt: number;
   expiresAt: number;
   userCommitment: Point;
@@ -146,10 +146,10 @@ export interface X402PaymentRequest {
 /** Credential in wire format (JSON-serializable) */
 export interface CredentialWireFormat {
   suite: ZKCredentialSuite;
-  kid?: string;
+  kid: string;
   service_id: string;
   tier: number;
-  presentation_budget: number;
+  identity_limit: number;
   issued_at: number;
   expires_at: number;
   commitment: string; // suite-prefixed: "pedersen-schnorr-poseidon-ultrahonk:0x..."
@@ -181,7 +181,20 @@ export type ZKCredentialErrorCode =
   | 'origin_mismatch'         // 400
   | 'payload_too_large'       // 413
   | 'unsupported_media_type'  // 415
-  | 'rate_limited';           // 429
+  | 'rate_limited'            // 429
+  | 'not_found'               // 404
+  | 'service_unavailable'     // 503
+  | 'server_error';           // 500
+
+/** 
+ * Standardized Error Envelope (spec §14)
+ * All 4xx/5xx responses MUST use this format.
+ */
+export interface ZKCredentialErrorResponse {
+  error: ZKCredentialErrorCode;
+  message?: string;
+  details?: Record<string, unknown>;
+}
 
 /** Error response body */
 export interface ZKCredentialError {
@@ -200,6 +213,9 @@ export const ERROR_CODE_TO_STATUS: Record<ZKCredentialErrorCode, number> = {
   payload_too_large: 413,
   unsupported_media_type: 415,
   rate_limited: 429,
+  not_found: 404,
+  service_unavailable: 503,
+  server_error: 500,
 };
 
 // =============================================================================
@@ -226,4 +242,23 @@ export function parseSchemePrefix(prefixed: string): { scheme: ZKCredentialSuite
 /** Create scheme-prefixed string */
 export function addSchemePrefix(scheme: ZKCredentialSuite, value: string): string {
   return `${scheme}:${value}`;
+}
+
+// =============================================================================
+// Key Discovery Types (spec §11)
+// =============================================================================
+
+/** JWK-like key format for ZK keys */
+export interface ZKCredentialKey {
+  kid: string;
+  alg: ZKCredentialSuite;
+  kty: 'ZK';
+  crv: 'BN254';
+  x: string; // hex formatted
+  y: string; // hex formatted
+}
+
+/** Response from /.well-known/zk-credential-keys */
+export interface ZKCredentialKeysResponse {
+  keys: ZKCredentialKey[];
 }

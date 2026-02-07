@@ -143,8 +143,9 @@ describe('End-to-End Flow', () => {
             port: FACILITATOR_PORT,
             serviceId: 1001n,
             secretKey: 123456789n,
+            kid: 'e2e-test-key',
             tiers: [
-                { minAmountCents: 10, tier: 1, presentationBudget: 10, durationSeconds: 3600 }
+                { minAmountCents: 10, tier: 1, identityLimit: 10, durationSeconds: 3600 }
             ],
             evmPayment: {
                 chainId: 31337,
@@ -174,6 +175,14 @@ describe('End-to-End Flow', () => {
             y: '0x' + pubkeyBytes.slice(66, 130),
         };
         console.log('Facilitator pubkey:', facilitatorPubkey);
+
+        // Verify /.well-known/zk-credential-keys
+        const wkResponse = await fetch(`http://localhost:${FACILITATOR_PORT}/.well-known/zk-credential-keys`);
+        expect(wkResponse.status).toBe(200);
+        const wkData = await wkResponse.json() as any;
+        expect(wkData.keys).toBeDefined();
+        expect(wkData.keys[0].kid).toBe('e2e-test-key');
+        expect(wkData.keys[0].x).toBe(facilitatorPubkey.x);
 
         // 2. Start API
         console.log('Starting API Server...');
@@ -315,14 +324,15 @@ describe('End-to-End Flow', () => {
         expect(storedCredential.tier).toBe(1);
         console.log('Credential obtained:', {
             serviceId: storedCredential.serviceId,
+            kid: storedCredential.kid,
             tier: storedCredential.tier,
         });
+        expect(storedCredential.kid).toBe('e2e-test-key');
 
         // 5. Access Protected API with zk_credential body presentation
         console.log('Accessing protected API with ZK proof...');
         const response = await client.makeAuthenticatedRequest(
-            `http://localhost:${API_PORT}/api/whoami`,
-            { issuerPubkey: facilitatorPubkey }
+            `http://localhost:${API_PORT}/api/whoami`
         );
 
         console.log('Response status:', response.status);

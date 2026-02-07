@@ -11,7 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CredentialIssuer, type IssuerConfig } from './issuer.js';
 import type { SettlementRequest } from './types.js';
-import { parseSchemePrefix } from '@demo/crypto';
+import { parseSchemePrefix, type ZKCredentialErrorResponse } from '@demo/crypto';
 
 export interface FacilitatorServerConfig extends IssuerConfig {
   port: number;
@@ -34,19 +34,47 @@ export function createFacilitatorServer(config: FacilitatorServerConfig) {
   });
 
   // Get facilitator info (public key, tiers) - spec compliant format
-  app.get('/info', async (_req, res) => {
-    const pubkeyPrefixed = await facilitator.getPublicKeyPrefixed();
-    res.json({
-      service_id: config.serviceId.toString(),
-      facilitator_pubkey: pubkeyPrefixed,
-      credential_suites: ['pedersen-schnorr-poseidon-ultrahonk'],
-      tiers: config.tiers.map(t => ({
-        tier: t.tier,
-        price_usdc: t.minAmountCents / 100,
-        presentation_budget: t.presentationBudget,
-        duration_seconds: t.durationSeconds,
-      })),
-    });
+  app.get('/info', async (_req, res, next) => {
+    try {
+      const pubkeyPrefixed = await facilitator.getPublicKeyPrefixed();
+      res.json({
+        service_id: config.serviceId.toString(),
+        facilitator_pubkey: pubkeyPrefixed,
+        credential_suites: ['pedersen-schnorr-poseidon-ultrahonk'],
+        tiers: config.tiers.map(t => ({
+          tier: t.tier,
+          price_usdc: t.minAmountCents / 100,
+          identity_limit: t.identityLimit, // using snake_case for wire format
+          duration_seconds: t.durationSeconds,
+        })),
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Well-known keys endpoint (spec §11)
+  app.get('/.well-known/zk-credential-keys', async (_req, res, next) => {
+    try {
+      const pubKey = await facilitator.getPublicKey();
+      const xHex = '0x' + pubKey.x.toString(16).padStart(64, '0');
+      const yHex = '0x' + pubKey.y.toString(16).padStart(64, '0');
+
+      res.json({
+        keys: [
+          {
+            kid: config.kid ?? '1',
+            alg: 'pedersen-schnorr-poseidon-ultrahonk',
+            kty: 'ZK',
+            crv: 'BN254',
+            x: xHex,
+            y: yHex,
+          }
+        ]
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   // Settlement endpoint (spec §8.3, §8.4)
@@ -57,17 +85,20 @@ export function createFacilitatorServer(config: FacilitatorServerConfig) {
 
       // Validate request structure
       if (!request.extensions?.zk_credential?.commitment) {
-        res.status(400).json({ error: 'Missing extensions.zk_credential.commitment' });
+        const error: ZKCredentialErrorResponse = { error: 'invalid_proof', message: 'Missing extensions.zk_credential.commitment' };
+        res.status(400).json(error);
         return;
       }
 
       if (!request.payment) {
-        res.status(400).json({ error: 'Missing payment (x402 v2 PaymentPayload)' });
+        const error: ZKCredentialErrorResponse = { error: 'invalid_proof', message: 'Missing payment (x402 v2 PaymentPayload)' };
+        res.status(400).json(error);
         return;
       }
 
       if (!request.paymentRequirements) {
-        res.status(400).json({ error: 'Missing paymentRequirements' });
+        const error: ZKCredentialErrorResponse = { error: 'invalid_proof', message: 'Missing paymentRequirements' };
+        res.status(400).json(error);
         return;
       }
 
@@ -75,11 +106,13 @@ export function createFacilitatorServer(config: FacilitatorServerConfig) {
       try {
         const { scheme } = parseSchemePrefix(request.extensions.zk_credential.commitment);
         if (scheme !== 'pedersen-schnorr-poseidon-ultrahonk') {
-          res.status(400).json({ error: 'unsupported_suite', message: `Unsupported suite: ${scheme}` });
+          const error: ZKCredentialErrorResponse = { error: 'unsupported_suite', message: `Unsupported suite: ${scheme}` };
+          res.status(400).json(error);
           return;
         }
       } catch {
-        res.status(400).json({ error: 'Invalid commitment format: expected suite-prefixed string' });
+        const error: ZKCredentialErrorResponse = { error: 'invalid_proof', message: 'Invalid commitment format: expected suite-prefixed string' };
+        res.status(400).json(error);
         return;
       }
 
@@ -90,10 +123,30 @@ export function createFacilitatorServer(config: FacilitatorServerConfig) {
     }
   });
 
+  // 404 Handler
+  app.use((_req, res) => {
+    const error: ZKCredentialErrorResponse = { error: 'not_found', message: 'Not Found' };
+    res.status(404).json(error);
+  });
+
   // Error handler
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
     console.error('[Facilitator] Error:', err.message);
-    res.status(500).json({ error: err.message });
+
+    // In production, hide internal error details
+    const isProduction = process.env.NODE_ENV === 'production';
+    const message = isProduction ? 'Internal Server Error' : err.message;
+
+    const error: ZKCredentialErrorResponse = {
+      error: 'server_error',
+      message
+    };
+
+    if (!isProduction && err.stack) {
+      error.details = { stack: err.stack };
+    }
+
+    res.status(500).json(error);
   });
 
   let httpServer: ReturnType<typeof app.listen> | null = null;
@@ -150,9 +203,9 @@ if (isMain) {
     secretKey: BigInt(process.env.FACILITATOR_SECRET_KEY ?? '0x1234567890abcdef'),
     allowMockPayments: process.env.ALLOW_MOCK_PAYMENTS === 'true',
     tiers: [
-      { minAmountCents: 1000, tier: 2, presentationBudget: 10000, durationSeconds: 30 * 24 * 60 * 60 }, // $10 = Enterprise
-      { minAmountCents: 100, tier: 1, presentationBudget: 1000, durationSeconds: 7 * 24 * 60 * 60 },   // $1 = Pro
-      { minAmountCents: 10, tier: 0, presentationBudget: 100, durationSeconds: 24 * 60 * 60 },         // $0.10 = Basic
+      { minAmountCents: 1000, tier: 2, identityLimit: 10000, durationSeconds: 30 * 24 * 60 * 60 }, // $10 = Enterprise
+      { minAmountCents: 100, tier: 1, identityLimit: 1000, durationSeconds: 7 * 24 * 60 * 60 },   // $1 = Pro
+      { minAmountCents: 10, tier: 0, identityLimit: 100, durationSeconds: 24 * 60 * 60 },         // $0.10 = Basic
     ],
     // EVM payment configuration (if private key is set)
     ...(process.env.FACILITATOR_PRIVATE_KEY && {

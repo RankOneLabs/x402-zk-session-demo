@@ -24,31 +24,22 @@ import {
   poseidonHash3,
   type Point,
   type X402WithZKCredentialResponse,
-  type ZKCredentialError,
+  type ZKCredentialErrorResponse,
   type ZKCredentialErrorCode,
   ERROR_CODE_TO_STATUS,
 } from '@demo/crypto';
 import { RateLimiter, type RateLimitConfig } from './ratelimit.js';
 import { ZkVerifier } from './verifier.js';
 
-/**
- * Structured error types for payment processing
- */
-type PaymentErrorCode =
-  | 'INVALID_REQUEST_STRUCTURE'
-  | 'PAYMENT_REJECTED'
-  | 'FACILITATOR_UNAVAILABLE'
-  | 'FACILITATOR_ERROR'
-  | 'PAYMENT_PROCESSING_ERROR';
-
 class PaymentError extends Error {
+  public readonly httpStatus: number;
   constructor(
-    public readonly code: PaymentErrorCode,
-    public readonly httpStatus: number,
+    public readonly code: ZKCredentialErrorCode,
     message: string
   ) {
     super(message);
     this.name = 'PaymentError';
+    this.httpStatus = ERROR_CODE_TO_STATUS[code];
   }
 }
 
@@ -181,7 +172,7 @@ export class ZkCredentialMiddleware {
   /**
    * Build ZK credential error response (spec §14)
    */
-  private buildErrorResponse(code: ZKCredentialErrorCode, message?: string): ZKCredentialError {
+  private buildErrorResponse(code: ZKCredentialErrorCode, message?: string): ZKCredentialErrorResponse {
     return { error: code, message };
   }
 
@@ -211,13 +202,12 @@ export class ZkCredentialMiddleware {
           console.log('[ZkCredential] Processing payment body...');
 
           if (!paymentBody || typeof paymentBody !== 'object') {
-            throw new PaymentError('INVALID_REQUEST_STRUCTURE', 400, 'Missing payment body');
+            throw new PaymentError('invalid_proof', 'Missing payment body');
           }
 
           if (!zkCredential?.commitment) {
             throw new PaymentError(
-              'INVALID_REQUEST_STRUCTURE',
-              400,
+              'invalid_proof',
               'Missing extensions.zk_credential.commitment per spec §8.2'
             );
           }
@@ -243,8 +233,7 @@ export class ZkCredentialMiddleware {
             });
           } catch (fetchError) {
             throw new PaymentError(
-              'FACILITATOR_UNAVAILABLE',
-              503,
+              'service_unavailable',
               'Payment facilitator is temporarily unavailable. Please retry.'
             );
           }
@@ -253,14 +242,12 @@ export class ZkCredentialMiddleware {
             const errBody = await settleResp.text();
             if (settleResp.status >= 400 && settleResp.status < 500) {
               throw new PaymentError(
-                'PAYMENT_REJECTED',
-                402,
+                'tier_insufficient',
                 `Payment rejected by facilitator: ${errBody}`
               );
             } else {
               throw new PaymentError(
-                'FACILITATOR_UNAVAILABLE',
-                503,
+                'service_unavailable',
                 'Payment facilitator is temporarily unavailable. Please retry.'
               );
             }
@@ -271,8 +258,7 @@ export class ZkCredentialMiddleware {
           // Validate settlement response structure (SettlementResponse from facilitator/types.ts)
           if (!settleData || typeof settleData !== 'object') {
             throw new PaymentError(
-              'FACILITATOR_ERROR',
-              502,
+              'server_error',
               'Payment facilitator returned an invalid response'
             );
           }
@@ -282,16 +268,14 @@ export class ZkCredentialMiddleware {
           // Validate payment_receipt
           if (!response.payment_receipt || typeof response.payment_receipt !== 'object') {
             throw new PaymentError(
-              'FACILITATOR_ERROR',
-              502,
+              'server_error',
               'Settlement response missing payment_receipt'
             );
           }
           const receipt = response.payment_receipt as Record<string, unknown>;
           if (receipt.status !== 'settled') {
             throw new PaymentError(
-              'PAYMENT_REJECTED',
-              402,
+              'tier_insufficient',
               `Settlement failed: status=${receipt.status}`
             );
           }
@@ -299,24 +283,21 @@ export class ZkCredentialMiddleware {
           // Validate extensions.zk_credential.credential
           if (!response.extensions || typeof response.extensions !== 'object') {
             throw new PaymentError(
-              'FACILITATOR_ERROR',
-              502,
+              'server_error',
               'Settlement response missing extensions'
             );
           }
           const extensions = response.extensions as Record<string, unknown>;
           if (!extensions.zk_credential || typeof extensions.zk_credential !== 'object') {
             throw new PaymentError(
-              'FACILITATOR_ERROR',
-              502,
+              'server_error',
               'Settlement response missing extensions.zk_credential'
             );
           }
           const zkCredExt = extensions.zk_credential as Record<string, unknown>;
           if (!zkCredExt.credential || typeof zkCredExt.credential !== 'object') {
             throw new PaymentError(
-              'FACILITATOR_ERROR',
-              502,
+              'server_error',
               'Settlement response missing extensions.zk_credential.credential'
             );
           }
@@ -325,8 +306,7 @@ export class ZkCredentialMiddleware {
           // Validate required credential fields
           if (typeof cred.tier !== 'number') {
             throw new PaymentError(
-              'FACILITATOR_ERROR',
-              502,
+              'server_error',
               'Settlement response credential missing tier'
             );
           }
@@ -358,7 +338,7 @@ export class ZkCredentialMiddleware {
 
           // Unknown error - return 500 to avoid silent failures
           res.status(500).json({
-            error: 'PAYMENT_PROCESSING_ERROR',
+            error: 'server_error',
             message: 'An unexpected error occurred processing payment',
           });
           return;

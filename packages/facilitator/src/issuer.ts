@@ -69,8 +69,8 @@ export interface TierConfig {
   minAmountCents: number;
   /** Tier level (0 = basic, 1 = pro, etc.) */
   tier: number;
-  /** Maximum presentations allowed (presentation_budget per spec) */
-  presentationBudget: number;
+  /** Maximum identities/presentations allowed (identityLimit per spec) */
+  identityLimit: number;
   /** Duration in seconds */
   durationSeconds: number;
 }
@@ -95,6 +95,8 @@ export interface IssuerConfig {
   serviceId: bigint;
   /** Issuer's secret key for signing ZK credentials */
   secretKey: bigint;
+  /** Key ID for the secret key (optional, defaults to '1') */
+  kid?: string;
   /** Pricing tiers (sorted by minAmountCents descending by the issuer) */
   tiers: TierConfig[];
   /** Enable mock payments for testing */
@@ -244,7 +246,7 @@ export class CredentialIssuer {
     const message = poseidonHash7(
       this.config.serviceId,
       BigInt(tierConfig.tier),
-      BigInt(tierConfig.presentationBudget),
+      BigInt(tierConfig.identityLimit),
       BigInt(now),
       BigInt(expiresAt),
       userCommitment.x,
@@ -277,7 +279,8 @@ export class CredentialIssuer {
             suite: 'pedersen-schnorr-poseidon-ultrahonk',
             service_id: bigIntToHex(this.config.serviceId),
             tier: tierConfig.tier,
-            presentation_budget: tierConfig.presentationBudget,
+            identity_limit: tierConfig.identityLimit,
+            kid: this.config.kid ?? '1',
             issued_at: now,
             expires_at: expiresAt,
             commitment: commitmentOutHex,
