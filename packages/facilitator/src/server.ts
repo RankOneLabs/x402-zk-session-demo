@@ -34,39 +34,47 @@ export function createFacilitatorServer(config: FacilitatorServerConfig) {
   });
 
   // Get facilitator info (public key, tiers) - spec compliant format
-  app.get('/info', async (_req, res) => {
-    const pubkeyPrefixed = await facilitator.getPublicKeyPrefixed();
-    res.json({
-      service_id: config.serviceId.toString(),
-      facilitator_pubkey: pubkeyPrefixed,
-      credential_suites: ['pedersen-schnorr-poseidon-ultrahonk'],
-      tiers: config.tiers.map(t => ({
-        tier: t.tier,
-        price_usdc: t.minAmountCents / 100,
-        identity_limit: t.identityLimit,
-        duration_seconds: t.durationSeconds,
-      })),
-    });
+  app.get('/info', async (_req, res, next) => {
+    try {
+      const pubkeyPrefixed = await facilitator.getPublicKeyPrefixed();
+      res.json({
+        service_id: config.serviceId.toString(),
+        facilitator_pubkey: pubkeyPrefixed,
+        credential_suites: ['pedersen-schnorr-poseidon-ultrahonk'],
+        tiers: config.tiers.map(t => ({
+          tier: t.tier,
+          price_usdc: t.minAmountCents / 100,
+          identity_limit: t.identityLimit, // using snake_case for wire format
+          duration_seconds: t.durationSeconds,
+        })),
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   // Well-known keys endpoint (spec §11)
-  app.get('/.well-known/zk-credential-keys', async (_req, res) => {
-    const pubKey = await facilitator.getPublicKey();
-    const xHex = '0x' + pubKey.x.toString(16).padStart(64, '0');
-    const yHex = '0x' + pubKey.y.toString(16).padStart(64, '0');
+  app.get('/.well-known/zk-credential-keys', async (_req, res, next) => {
+    try {
+      const pubKey = await facilitator.getPublicKey();
+      const xHex = '0x' + pubKey.x.toString(16).padStart(64, '0');
+      const yHex = '0x' + pubKey.y.toString(16).padStart(64, '0');
 
-    res.json({
-      keys: [
-        {
-          kid: config.kid ?? '1',
-          alg: 'pedersen-schnorr-poseidon-ultrahonk',
-          kty: 'ZK',
-          crv: 'BN254',
-          x: xHex,
-          y: yHex,
-        }
-      ]
-    });
+      res.json({
+        keys: [
+          {
+            kid: config.kid ?? '1',
+            alg: 'pedersen-schnorr-poseidon-ultrahonk',
+            kty: 'ZK',
+            crv: 'BN254',
+            x: xHex,
+            y: yHex,
+          }
+        ]
+      });
+    } catch (error) {
+      next(error);
+    }
   });
 
   // Settlement endpoint (spec §8.3, §8.4)
